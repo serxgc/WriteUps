@@ -1,11 +1,8 @@
 # Writeups
 
-Documentacion de maquinas resueltas en plataformas de hacking etico. Cada writeup incluye metodologia completa, explicacion de vulnerabilidades y comandos utilizados.
+Documentación de máquinas resueltas en plataformas de hacking ético. Cada writeup incluye metodología completa, explicación de vulnerabilidades y comandos utilizados.
 
 ---
 
-
-
-
-> Los writeups se publican con fines educativos.
-> Contenido en Espanol.
+> Los writeups se publican con fines educativos.  
+> Contenido en español.
