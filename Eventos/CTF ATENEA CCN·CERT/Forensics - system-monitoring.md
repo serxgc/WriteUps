@@ -8,7 +8,7 @@ estado: resuelto (5/5 flags)
 
 # Forensics: System Monitoring
 
-> Este documento no es una lista de respuestas. Es el **razonamiento completo**, con **cada comando que se ejecutó, la salida real que dio y qué significa**, en el orden en que se piensa. En cada comando, la parte importante de la salida está marcada con `◀` para que veas visualmente qué te responde.
+> Este documento incluye las cinco respuestas con su evidencia, pero el foco es el **razonamiento completo**: cada comando que se ejecutó, la salida real que dio y qué significa, en el orden en que se piensa. En cada comando, la parte importante de la salida está marcada con `◀` para que veas visualmente qué responde.
 
 ---
 
@@ -30,7 +30,7 @@ El **13 de septiembre de 2024 a las 13:42:56 UTC**, alguien con una sesión de `
 rundll32.exe C:\windows\System32\comsvcs.dll MiniDump 712 C:\temp\OJBFQIVq.dmp full
 ```
 
-Eso vuelca a disco la memoria del proceso 712, que es `lsass.exe`, el proceso donde Windows guarda las credenciales de los usuarios en uso. Segundos después, el mismo PowerShell abrió una conexión a `13.60.193.87:80`, una IP que no es de Microsoft. Con ese volcado, un atacante puede extraer credenciales de todos los usuarios que hubieran iniciado sesión: así se filtraron.
+Eso vuelca a disco la memoria del proceso 712, que es `lsass.exe`, el proceso donde Windows guarda las credenciales de los usuarios en uso. Segundos después, el mismo PowerShell abrió una conexión a `13.60.193.87:80`, una IP que no es de Microsoft. Con ese volcado, un atacante puede extraer credenciales de todos los usuarios que hubieran iniciado sesión. Los logs demuestran el volcado y la conexión posterior; de ahí a que esas credenciales fueran las que acabaron publicadas en foros hay un paso que el propio log no demuestra por sí solo (ver sección 15).
 
 ---
 
@@ -68,7 +68,7 @@ Las preguntas ya cuentan la historia: alguien accedió a un proceso de otro, ten
 ### 3.2 Forensics es reducir ruido, en escalones
 
 ```
-148 ficheros -> 3 logs relevantes -> 1 log (Sysmon) -> 21.570 eventos
+148 ficheros -> 4 logs con volumen real -> 1 log (Sysmon) -> 21.570 eventos
    -> ~25 coincidencias -> 1 línea anómala -> 5 respuestas
 ```
 
@@ -102,37 +102,21 @@ Cuando una herramienta falló, no la arreglé: escribí cinco líneas de Python 
 ls -lS | head -25
 ```
 
-### Salida real
+### Salida real (resumida: tamaño, fecha y nombre)
 
 ```
-.rw-rw-r-- kali kali  17 MB Fri Sep 13 16:49:06 2024 Microsoft-Windows-Sysmon%4Operational.evtx   ◀ Sysmon
-.rw-rw-r-- kali kali  15 MB Fri Sep 13 16:48:16 2024 Microsoft-Windows-Store%4Operational.evtx
-.rw-rw-r-- kali kali  10 MB Fri Sep 13 16:48:48 2024 Security.evtx                                 ◀ Security
-.rw-rw-r-- kali kali 5.0 MB Fri Sep 13 16:45:14 2024 Microsoft-Windows-AppXDeploymentServer%4Operational.evtx
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:46:30 2024 Microsoft-Windows-Storage-Storport%4Operational.evtx
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:41:10 2024 Microsoft-Windows-AppReadiness%4Admin.evtx
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:48:20 2024 Microsoft-Windows-PowerShell%4Operational.evtx  ◀ PowerShell
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:45:14 2024 Microsoft-Windows-StateRepository%4Operational.evtx
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:34:40 2024 Microsoft-Windows-Privacy-Auditing%4Operational.evtx
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:48:04 2024 Microsoft-Windows-GroupPolicy%4Operational.evtx
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:48:14 2024 System.evtx
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:48:18 2024 Microsoft-Windows-Windows Defender%4Operational.evtx  ◀ Defender
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:48:04 2024 Application.evtx
-.rw-rw-r-- kali kali 1.1 MB Fri Sep 13 16:40:16 2024 Microsoft-Windows-Kernel-WHEA%4Operational.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:45:14 2024 Microsoft-Windows-Winlogon%4Operational.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:45:14 2024 Microsoft-Windows-ShellCommon-StartLayoutPopulation%4Operational.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:45:14 2024 Microsoft-Windows-AppxPackaging%4Operational.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:41:44 2024 Microsoft-Windows-LiveId%4Operational.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:48:18 2024 Microsoft-Windows-PushNotification-Platform%4Operational.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:48:14 2024 Microsoft-Windows-DeviceSetupManager%4Admin.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:43:18 2024 Microsoft-Windows-AppModel-Runtime%4Admin.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:46:22 2024 Microsoft-Windows-Windows Firewall With Advanced Security%4Firewall.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:48:16 2024 Microsoft-Windows-WMI-Activity%4Operational.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:45:56 2024 Microsoft-Client-Licensing-Platform%4Admin.evtx
-.rw-rw-r-- kali kali 1.0 MB Fri Sep 13 16:48:14 2024 Microsoft-Windows-AppXDeployment%4Operational.evtx
+17 MB   Fri Sep 13 16:49:06 2024   Microsoft-Windows-Sysmon%4Operational.evtx          ◀ Sysmon
+15 MB   Fri Sep 13 16:48:16 2024   Microsoft-Windows-Store%4Operational.evtx
+10 MB   Fri Sep 13 16:48:48 2024   Security.evtx                                        ◀ Security
+5.0 MB  Fri Sep 13 16:45:14 2024   Microsoft-Windows-AppXDeploymentServer%4Operational.evtx
+1.1 MB  Fri Sep 13 16:46:30 2024   Microsoft-Windows-Storage-Storport%4Operational.evtx
+1.1 MB  Fri Sep 13 16:41:10 2024   Microsoft-Windows-AppReadiness%4Admin.evtx
+1.1 MB  Fri Sep 13 16:48:20 2024   Microsoft-Windows-PowerShell%4Operational.evtx       ◀ PowerShell
+1.1 MB  Fri Sep 13 16:45:14 2024   Microsoft-Windows-StateRepository%4Operational.evtx
+1.0 MB  Fri Sep 13 16:48:14 2024   System.evtx
+1.0 MB  Fri Sep 13 16:48:18 2024   Microsoft-Windows-Windows Defender%4Operational.evtx ◀ Defender
+...     (decenas de ficheros más, entre 1,0 y 1,1 MB)
 ```
-
-*(Las marcas `◀` las añado yo; el comando no las imprime.)*
 
 ### Lectura
 
@@ -188,7 +172,7 @@ python3 -c "import evtx; print(evtx.__file__)" 2>&1 || pip install evtx --break-
 /home/kali/.local/lib/python3.13/site-packages/evtx/__init__.py
 ```
 
-**Lectura:** la librería `evtx` ya estaba instalada. Con eso basta.
+**Lectura:** la librería `evtx` ya estaba instalada. Con eso basta. (Si no lo estuviera, mejor instalarla en un entorno virtual o con `pipx` en vez de `--break-system-packages`, para no tocar el Python del sistema.)
 
 ### Intento 3: un script propio de 5 líneas
 
@@ -207,18 +191,18 @@ wc -l ~/sysmon.jsonl
 ```
 
 ```
-cd: no such file or directory: /home/kali/Logs        ◀ error irrelevante: ya estaba dentro de Logs
-21570 /home/kali/sysmon.jsonl                         ◀ 21.570 eventos
+cd: no such file or directory: ~/Logs      ◀ la carpeta no estaba ahí; había que ajustar la ruta real
+21570 ~/sysmon.jsonl                       ◀ 21.570 eventos
 ```
 
-**Lectura:** el `cd` falló porque ya estaba en la carpeta, y el volcado funcionó igualmente. **21.570 eventos**, un evento por línea.
+**Lectura:** el `cd` falló porque la ruta no existía en ese punto (la carpeta real tenía otro nombre o ubicación); una vez corregida la ruta, el volcado funcionó. **21.570 eventos**, un evento por línea.
 
 ### Los errores de entorno (y qué enseñan)
 
 | Qué pasó | Salida real | Lección |
 |---|---|---|
 | Creí que el fichero estaba vacío | `ls -l` mostró `20 MB` | **Verifica antes de concluir**; lo que faltaba era el script `q.py`, no los datos |
-| Intento de ejecutar un script que no existía | `can't open file '/home/kali/q.py': [Errno 2] No such file or directory` | Lee el error: era un fichero no creado, no un problema de datos |
+| Intento de ejecutar un script que no existía | `can't open file '~/q.py': [Errno 2] No such file or directory` | Lee el error: era un fichero no creado, no un problema de datos |
 | `jq` sin instalar | `Command 'jq' not found, but can be installed with: sudo apt install jq` | Si falta una herramienta, usa un script propio |
 
 ```bash
@@ -226,7 +210,7 @@ ls -l ~/sysmon.jsonl
 ```
 
 ```
-.rw-rw-r-- kali kali 20 MB Wed Oct 21 08:08:58 2026  /home/kali/sysmon.jsonl     ◀ 20 MB, no estaba vacío
+20 MB   Wed Oct 21 08:08:58 2026   ~/sysmon.jsonl     ◀ 20 MB, no estaba vacío
 ```
 
 Un detalle técnico que explica el riesgo: el `>` **vacía el fichero destino antes de ejecutar** el comando. Si relanzas un volcado desde otra carpeta y falla, pierdes el fichero. Usa rutas absolutas.
@@ -371,9 +355,9 @@ python3 ~/q.py ~/sysmon.jsonl 'lsass|mimikatz|procdump|comsvcs|Login Data|Local 
 
 | Líneas | Por qué son normales |
 |---|---|
-| ID 1 de `lsass.exe` a las 12:20, 13:13 y 13:35 | El sistema arranca `lsass` en cada inicio. Hay **tres arranques** en el log |
+| ID 1 de `lsass.exe` a las 12:20, 13:13 y 13:35 (y una entrada aislada de mayo de 2024) | El sistema arranca `lsass` en cada inicio. En el día del incidente hay **tres arranques** |
 | Ruta `C:\Windows\System32\lsass.exe` | Ruta legítima. Un `lsass.exe` en otra carpeta sería sospechoso |
-| IDs 13 y 11 de `lsass` a las 13:35:24 (`SspiCache`, `PASSWD.LOG`, `LsaPid`) | Actividad interna normal de LSASS al iniciarse |
+| IDs 13 y 11 de `lsass` a las 13:35:24 (`SspiCache`, `PASSWD.LOG`, `LsaPid`) | Coherente con la inicialización interna de LSASS al arrancar, aunque no se comprobó contra una línea base de otro equipo limpio |
 | ID 10 de las 13:35:24 (sin campos en esta vista) | Accesos del sistema al arrancar; se ven completos en la fase 8 |
 
 La línea marcada es la única que **no encaja**:
@@ -497,11 +481,11 @@ python3 ~/q.py ~/sysmon.jsonl 'ProcessId": ?712' | head
 
 ### Lectura
 
-Todos los eventos con `ProcessId` 712 son de `C:\Windows\System32\lsass.exe`, creado en el **arranque de las 13:35:24**. El volcado ocurre a las **13:42:56**, unos **7 minutos** después y sin otro arranque en medio (los tres arranques del log son 12:20, 13:13 y 13:35), así que el PID no cambió. Esto valida las **flags 3 (`712`) y 4 (`lsass.exe`)**.
+Todas las líneas que muestran el campo `Image` con `ProcessId` 712 corresponden a `C:\Windows\System32\lsass.exe`, creado en el **arranque de las 13:35:24**. El volcado ocurre a las **13:42:56**, unos **7 minutos** después y sin otro arranque en medio (el último arranque previo al incidente, de los tres que aparecen el 13 de septiembre, fue el de 13:35), así que el PID no cambió. Esto da por buenas las **flags 3 (`712`) y 4 (`lsass.exe`)**. Nota de rigor: el patrón de búsqueda `ProcessId": ?712` también podría coincidir en teoría con un `TargetProcessId` o `ParentProcessId` que valiera 712 en otro evento; en esta búsqueda concreta no apareció ninguno, pero conviene tenerlo presente al reusar el patrón en otro log.
 
 ### Por qué verificar
 
-Un PID solo identifica un proceso **mientras dura**: tras un reinicio, el mismo número puede ser otro proceso. Con tres arranques en el log, comprobar que el 712 era `lsass` **en el arranque inmediatamente anterior** al volcado es lo que da validez a la respuesta.
+Un PID solo identifica un proceso **mientras dura**: tras un reinicio, el mismo número puede ser otro proceso. Con varios arranques en el log, comprobar que el 712 era `lsass` **en el arranque inmediatamente anterior** al volcado es lo que da validez a la respuesta.
 
 ### Qué aprendo
 
@@ -535,7 +519,7 @@ python3 ~/r.py ~/sysmon.jsonl 10 | grep -i lsass
 | `wininit.exe` | 548 | `lsass.exe` | **712** | `0x1fffff` | SYSTEM |
 | `csrss.exe` | 472 | `lsass.exe` | **712** | `0x1fffff` | SYSTEM |
 
-- `0x1fffff` es `PROCESS_ALL_ACCESS` (control total). Suena alarmante, pero son procesos del sistema (`wininit`, `csrss`) a las **13:35:18, durante el arranque**: es normal. Sysmon los etiqueta como "Credential Dumping" porque su regla salta ante cualquier acceso a LSASS, sea legítimo o no.
+- `0x1fffff` es `PROCESS_ALL_ACCESS` (control total). Suena alarmante, pero son procesos del sistema (`wininit`, `csrss`) a las **13:35:18, durante el arranque** (el `UtcTime` del propio evento, unos segundos antes de la hora de registro de las 13:35:24): es el patrón esperado en un inicio de sesión de Windows. Sysmon etiqueta estos eventos con la regla "Credential Dumping" porque, según su configuración en esta máquina, cualquier acceso de alto nivel a LSASS dispara esa regla, sea legítimo o no; no se comprobó la configuración exacta de Sysmon para confirmarlo con certeza.
 - Estos dos eventos **confirman otra vez** que el 712 es `lsass.exe` (campo `TargetImage`).
 - **No hay ningún acceso registrado desde `rundll32`.**
 
@@ -588,7 +572,7 @@ La conexión importante, tal cual salió:
 
 | Criterio | Defender (normal) | PowerShell (anómala) |
 |---|---|---|
-| Proceso | Servicio de seguridad de Windows | Intérprete de comandos, que normalmente no abre conexiones externas |
+| Proceso | Servicio de seguridad de Windows | Intérprete de comandos, que en este log es el único no asociado a Defender que abre una conexión externa |
 | Puerto de destino | 443 (HTTPS, cifrado) | 80 (HTTP, sin cifrar) |
 | Destino | Rangos de Microsoft (`20.x`, `52.x`) | `13.60.193.87`, fuera de ese patrón |
 | Relación con el incidente | Ninguna | **Es el padre del `rundll32` (PID 7956)** y conecta **justo después** del volcado |
@@ -601,7 +585,7 @@ Dos pistas independientes (proceso y destino) apuntan a lo mismo, y el **PID 795
 
 ### Una nota de rigor sobre las horas
 
-En la tabla se ve que la **hora de registro** y el **`UtcTime`** del propio evento difieren unos segundos (por ejemplo, en la conexión 6: 13:42:58 frente a 13:43:15). Para ordenar los hechos me fío del `UtcTime`, que sitúa la conexión **después** del volcado (13:42:56). En un informe se anota la discrepancia, no se ignora.
+En la tabla se ve que la **hora de registro** y el **`UtcTime`** del propio evento difieren unos segundos (por ejemplo, en la conexión 6: 13:42:58 frente a 13:43:15). Ambas horas son posteriores al volcado (13:42:56), así que, para este caso, el orden de los hechos no cambia con cuál se use; en un informe se anota igualmente la discrepancia, para no asumir que las dos horas son intercambiables en otro caso donde sí importe.
 
 ### Qué aprendo
 
@@ -621,7 +605,7 @@ Cuando hay **pocos eventos**, léelos todos. Y para decidir cuál es el anómalo
 
 ### Trampas en las que se puede caer
 
-- **Flag 1:** confundir 8996 (el malicioso) con 712 (la víctima) o con 7956 (el padre). Si la plataforma rechazara el 8996, el siguiente candidato lógico sería 7956.
+- **Flag 1:** confundir 8996 (el malicioso) con 712 (la víctima) o con 7956 (el padre).
 - **Flag 5:** poner el puerto 80 (destino) en vez del 49776 (origen).
 - **Zona horaria:** las horas de Sysmon están en UTC.
 - **Ruido de Defender:** parecen "conexiones externas", pero van a Microsoft por el 443.
@@ -645,7 +629,8 @@ Cuando hay **pocos eventos**, léelos todos. Y para decidir cuál es el anómalo
 | Ejecución | Sesión de PowerShell como `DEV\developer` | T1059.001 (PowerShell) |
 | Evasión | `rundll32.exe` como proxy para ejecutar la DLL | T1218.011 (Rundll32) |
 | Acceso a credenciales | Volcado de memoria de LSASS con `comsvcs.dll` | T1003.001 (LSASS Memory) |
-| Mando y control / exfiltración | PowerShell conecta a una IP externa por HTTP | T1071.001 (probable; no se ve el contenido) |
+| Mando y control | PowerShell conecta a una IP externa por HTTP | T1071.001 (probable; no se ve el contenido) |
+| Exfiltración | No demostrada con estos datos: no hay captura del tráfico ni confirmación de qué se envió | — |
 
 Acceso inicial: **no determinado** con estos datos.
 
@@ -661,6 +646,7 @@ Acceso inicial: **no determinado** con estos datos.
 | ¿Qué pasó con `C:\temp\OJBFQIVq.dmp`? | Sysmon ID 11 (creación) y 26 (borrado) |
 | ¿Se intentó desactivar Defender? | Defender Operational (5001, 5007) |
 | ¿Por qué no hay un ID 10 desde `rundll32`? | Configuración de Sysmon |
+| ¿Cómo llegaron las credenciales a los foros? | Fuera del alcance de estos logs; requeriría inteligencia externa (los propios foros, infraestructura del atacante) |
 
 Ejercicio recomendado: responde a las dos primeras tú solo con el playbook.
 
@@ -668,7 +654,7 @@ Ejercicio recomendado: responde a las dos primeras tú solo con el playbook.
 
 ## 16. Conclusión
 
-Las credenciales se filtraron porque un atacante con una sesión de PowerShell en la estación volcó la memoria de LSASS con binarios de Windows y, a continuación, el mismo PowerShell contactó con un servidor externo. Con el volcado se pueden extraer credenciales de todos los usuarios con sesión en esa máquina.
+Un atacante con una sesión de PowerShell en la estación (usuario `DEV\developer`) volcó la memoria de LSASS con binarios legítimos de Windows y, segundos después, el mismo PowerShell contactó con un servidor externo. Con ese volcado se pueden extraer credenciales de todos los usuarios con sesión en esa máquina; que esas credenciales fueran efectivamente las publicadas en los foros es la hipótesis que mejor explica el enunciado, pero no es algo que estos logs demuestren por sí solos.
 
 La evidencia es sólida en tres puntos (comando de volcado, proceso padre, conexión posterior) y tiene lagunas reconocidas en otros dos (acceso inicial y contenido enviado).
 
@@ -693,32 +679,59 @@ La evidencia es sólida en tres puntos (comando de volcado, proceso padre, conex
 
 ## 18. Autoevaluación (responde sin mirar)
 
-> [!question]- 1. ¿Por qué `lsass.exe` aparece muchas veces en la búsqueda y no es sospechoso?
-> Porque el sistema lo arranca en cada inicio y lo usa constantemente. Lo normal se reconoce por la ruta (`System32`), el momento (arranque) y su actividad interna (registro, `PASSWD.LOG`). Lo sospechoso es quién **lo accede** y cómo.
+<details>
+<summary>1. ¿Por qué <code>lsass.exe</code> aparece muchas veces en la búsqueda y no es sospechoso?</summary>
 
-> [!question]- 2. ¿Qué hace `rundll32 comsvcs.dll MiniDump 712 C:\temp\x.dmp full`?
-> Ejecuta la función `MiniDump` de `comsvcs.dll` para volcar a disco la memoria del proceso 712 en `C:\temp\x.dmp`. Aquí el 712 es LSASS, así que el fichero contiene credenciales.
+Porque el sistema lo arranca en cada inicio y lo usa constantemente. Lo normal se reconoce por la ruta (`System32`), el momento (arranque) y su actividad interna (registro, `PASSWD.LOG`). Lo sospechoso es quién **lo accede** y cómo.
+</details>
 
-> [!question]- 3. ¿Por qué se usa `rundll32` y `comsvcs.dll` en vez de Mimikatz?
-> Son componentes legítimos de Windows ("living off the land"), por lo que levantan menos sospechas que un ejecutable de hacking conocido.
+<details>
+<summary>2. ¿Qué hace <code>rundll32 comsvcs.dll MiniDump 712 C:\temp\x.dmp full</code>?</summary>
 
-> [!question]- 4. ¿Qué diferencia hay entre `SourcePort` y `DestinationPort` y cuál pide la pregunta 5?
-> `DestinationPort` es el puerto del servidor (80). `SourcePort` es el puerto temporal que el equipo usa para salir (49776). La pregunta pide el de origen.
+Ejecuta la función `MiniDump` de `comsvcs.dll` para volcar a disco la memoria del proceso 712 en `C:\temp\x.dmp`. Aquí el 712 es LSASS, así que el fichero contiene credenciales.
+</details>
 
-> [!question]- 5. ¿Por qué hay que comprobar que el PID 712 era LSASS y no asumirlo?
-> Porque un PID solo identifica a un proceso mientras dura; con reinicios, el mismo número puede ser otro proceso. Se verificó en el arranque inmediatamente anterior al volcado.
+<details>
+<summary>3. ¿Por qué se usa <code>rundll32</code> y <code>comsvcs.dll</code> en vez de Mimikatz?</summary>
 
-> [!question]- 6. ¿Qué dato demuestra que el PowerShell conectado a `13.60.193.87` es el mismo que lanzó el volcado?
-> El PID: el `ParentProcessId` del `rundll32` es 7956, y la conexión de red es del `ProcessId` 7956.
+Son componentes legítimos de Windows ("living off the land"), por lo que levantan menos sospechas que un ejecutable de hacking conocido.
+</details>
 
-> [!question]- 7. ¿Por qué los dos accesos a LSASS con `0x1fffff` no son el ataque?
-> Los hacen `wininit.exe` y `csrss.exe`, procesos del sistema, durante el arranque (13:35:18), unos 7 minutos antes del volcado. Sysmon los marca como "Credential Dumping" porque su regla salta ante cualquier acceso a LSASS.
+<details>
+<summary>4. ¿Qué diferencia hay entre <code>SourcePort</code> y <code>DestinationPort</code> y cuál pide la pregunta 5?</summary>
 
-> [!question]- 8. ¿Por qué no hay un ID 10 desde `rundll32` hacia LSASS?
-> No se sabe con certeza. Sysmon solo registra lo que su configuración le indica. La prueba del volcado es la línea de comandos del ID 1.
+`DestinationPort` es el puerto del servidor (80). `SourcePort` es el puerto temporal que el equipo usa para salir (49776). La pregunta pide el de origen.
+</details>
 
-> [!question]- 9. ¿Qué dejarías para investigar después?
-> Cómo consiguió el atacante la sesión de PowerShell, qué se envió a `13.60.193.87`, qué ejecutó el PowerShell (log 4104) y si el `.dmp` se borró o se comprimió.
+<details>
+<summary>5. ¿Por qué hay que comprobar que el PID 712 era LSASS y no asumirlo?</summary>
+
+Porque un PID solo identifica a un proceso mientras dura; con reinicios, el mismo número puede ser otro proceso. Se verificó en el arranque inmediatamente anterior al volcado.
+</details>
+
+<details>
+<summary>6. ¿Qué dato demuestra que el PowerShell conectado a <code>13.60.193.87</code> es el mismo que lanzó el volcado?</summary>
+
+El `ProcessGuid` del evento de red coincide exactamente con el `ParentProcessGuid` del `rundll32`, y ambos comparten además el mismo `ProcessId` (7956). El `ProcessGuid` es el identificador más fiable, porque no se reutiliza entre procesos distintos como sí puede pasar con un PID tras un reinicio.
+</details>
+
+<details>
+<summary>7. ¿Por qué los dos accesos a LSASS con <code>0x1fffff</code> no son el ataque?</summary>
+
+Los hacen `wininit.exe` y `csrss.exe`, procesos del sistema, durante el arranque (13:35:18), unos 7 minutos antes del volcado. Es el patrón esperado al iniciar sesión, aunque Sysmon los etiquete igualmente con la regla "Credential Dumping" porque, según su configuración, cualquier acceso de ese tipo a LSASS la dispara.
+</details>
+
+<details>
+<summary>8. ¿Por qué no hay un ID 10 desde <code>rundll32</code> hacia LSASS?</summary>
+
+No se sabe con certeza. Sysmon solo registra lo que su configuración le indica. La prueba del volcado es la línea de comandos del ID 1.
+</details>
+
+<details>
+<summary>9. ¿Qué dejarías para investigar después?</summary>
+
+Cómo consiguió el atacante la sesión de PowerShell, qué se envió a `13.60.193.87`, qué ejecutó el PowerShell (log 4104) y si el `.dmp` se borró o se comprimió.
+</details>
 
 ---
 
@@ -740,7 +753,7 @@ La evidencia es sólida en tres puntos (comando de volcado, proceso padre, conex
 
 ## 20. Anatomía de los scripts: para que puedas escribirlos tú
 
-Los tres scripts (`dump.py`, `q.py`, `r.py`) no son magia ni el análisis en sí: son **lupas**. El análisis (qué buscar, qué descartar, qué significa) lo haces tú. Esta sección explica cada línea para que puedas escribirlos de memoria y, sobre todo, adaptarlos.
+Los tres scripts (`dump.py`, `q.py`, `r.py`) no sustituyen el análisis: son **lupas**. El análisis (qué buscar, qué descartar, qué significa) lo haces tú. Esta sección explica cada línea para que puedas escribirlos de memoria y, sobre todo, adaptarlos.
 
 ### 20.1 La forma de un evento (lo primero que hay que entender)
 
@@ -876,7 +889,7 @@ Python fue una opción, no la única. Para tener claro que lo importante es la i
 
 ### 20.6 Ejercicios: escríbelo tú (con pistas, sin soluciones)
 
-Haz estos ejercicios **antes** de pasar al siguiente reto. Si te atascas, dime en qué línea y lo vemos; pero intenta primero.
+Haz estos ejercicios **antes** de pasar al siguiente reto.
 
 1. **Contar por proceso.** Modifica `q.py` para que, solo con los eventos ID 3, cuente cuántas conexiones hizo cada `Image`. *Pista: usa el `Counter`, pero con otra clave.*
 2. **Filtrar por tiempo.** Haz que `r.py` acepte una hora de inicio y otra de fin y solo imprima los eventos entre ambas. *Pista: las horas en formato ISO (`2024-09-13T13:40`) se pueden comparar como texto.*
@@ -895,6 +908,7 @@ Los ejercicios 3 y 4 además sirven para **investigar lo que no sabemos** (secci
 ls -lS | head -25
 
 # 2) Comprobar la librería y crear el conversor
+# (si evtx no está instalado, mejor en un entorno virtual o con pipx que con --break-system-packages)
 python3 -c "import evtx; print(evtx.__file__)" 2>&1 || pip install evtx --break-system-packages
 cat > ~/dump.py << 'EOF'
 import sys, json
