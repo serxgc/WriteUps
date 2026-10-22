@@ -1,5 +1,4 @@
 
-
 Oct 19, 2026 · @Serx
 
 ## Resumen ejecutivo
