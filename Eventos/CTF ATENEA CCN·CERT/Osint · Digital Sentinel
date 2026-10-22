@@ -1,0 +1,338 @@
+---
+tags: [ctf, osint, socmint, atenea, htb]
+reto: The Digital Sentinel
+categoria: OSINT
+evento: ATENEA-JORNADAS (CCN-CERT)
+estado: resuelto (11/11 respuestas)
+---
+
+
+## 1. El escenario
+
+> **The Digital Sentinel.** Las conversaciones de la "Serpent Society" indican que el usuario `justice_rises_2025` podría estar apuntando al festival Unity Week, donde la UNESCO presentará artefactos recuperados. El sujeto tiene acceso interno por trabajar en la cafetería del campus. Hay que usar herramientas SOCMINT para evaluar: ¿Jordan Davidson es un empleado descontento o un agente durmiente de la Serpent Society? 12 datos críticos revelarán la verdad antes del 5 de octubre.
+
+Nota: es un escenario **ficticio** de entrenamiento. En un caso real, identificar y evaluar a una persona a partir de sus redes tiene implicaciones legales y de privacidad (RGPD, proporcionalidad, base legal) que aquí no se aplican, pero hay que tenerlas presentes.
+
+### Qué tienes al empezar
+
+- Un único selector: el nombre de usuario **`justice_rises_2025`**.
+- Una estación de trabajo simulada con varias pestañas abiertas: Instagram, TikTok, Discord, Reddit y un portal de RRHH de la universidad.
+- 11 preguntas (el enunciado habla de 12 datos; la plataforma pedía 11 respuestas).
+
+---
+
+## 2. El entorno de trabajo
+
+![[02-escritorio-socmint-matrix-exif.png]]
+
+*Captura 2: la estación "Tails SOCMINT Workstation". Se ven la pestaña de Instagram, la terminal con un barrido de cuentas y con un volcado de ExifTool, Maltego CE y el panel "Threat Assessment Matrix".*
+
+Qué hay en esa pantalla y para qué sirve:
+
+| Elemento | Qué es | Para qué se usa |
+|---|---|---|
+| Pestañas del navegador | Instagram, TikTok, Discord, Reddit, HR Portal | Las cinco fuentes de las que salen las respuestas |
+| Terminal | Barrido de cuentas y salida de ExifTool | Comprobar en qué sitios existe el usuario y leer los metadatos de una foto |
+| Maltego CE | Herramienta de grafos de relaciones | Visualizar conexiones entre identidades (no se necesitó para las preguntas) |
+| Threat Assessment Matrix | Panel de valoración de riesgo | Resumen de la plataforma; **no es evidencia propia** |
+
+---
+
+## 3. Mentalidad OSINT: cómo se piensa
+
+### 3.1 Un selector es un hilo del que tirar
+
+Empiezas con un solo dato (`justice_rises_2025`). El método es siempre:
+
+```
+selector  ->  fuente  ->  dato nuevo  ->  nuevo selector  ->  otra fuente ...
+```
+
+Cada dato que encuentras es a su vez un selector para la siguiente fuente. Aquí: un usuario de Instagram da un nombre real, el nombre real y la cafetería llevan al portal de RRHH, y el horario de RRHH enlaza con un mensaje de Discord.
+
+### 3.2 Un dato en una fuente es una pista; en dos fuentes, evidencia
+
+Lo que convierte "creo que es él" en "es él" es la **corroboración cruzada**. En este reto hay cuatro vínculos entre fuentes distintas (sección 12). Sin ellos, solo hay coincidencias de nombre de usuario, que cualquiera puede copiar.
+
+### 3.3 Hecho, inferencia, hipótesis
+
+Hay que separar tres niveles en el informe:
+
+| Nivel | Ejemplo en este reto |
+|---|---|
+| **Hecho** (se ve) | El post dice "October 5th approaches" |
+| **Inferencia** (se deduce con base) | El horario del HR coincide con el del mensaje de Discord, luego son la misma persona |
+| **Hipótesis** (se sospecha, sin probar) | Que "plotting at my usual spot" se refiera a la cafetería |
+
+### 3.4 La plataforma pide el texto exacto: copia, no escribas
+
+Casi todas las preguntas dicen "exactamente como está escrito" o "sin emojis". Los fallos más típicos son una mayúscula, un guion bajo, un espacio o la coma. **Copia y pega** el texto de la captura en vez de reescribirlo.
+
+### 3.5 No des por buena la herramienta de resumen
+
+El panel "Threat Assessment Matrix" dice "HIGH, 11/20". Es una conclusión ya digerida por alguien. Úsala como pista, pero la evidencia es lo que **tú** ves en las fuentes.
+
+---
+
+## 4. P1: Caption del post del 30 de septiembre, 2:55 PM
+
+![[01-instagram-perfil.png]]
+
+*Captura 1: el perfil de Instagram. Abajo, el primer post visible: "justice_rises_2025, Sept 30, 2:55 PM".*
+
+- **Pregunta:** texto exacto del caption del post del 30 de septiembre a las 2:55 PM, sin emojis.
+- **Respuesta:** `plotting at my usual spot`
+- **Cómo se llega:** en el perfil se localiza el post por su fecha y hora (se ve en la cabecera del post) y se lee el texto bajo la imagen.
+- **Por qué importa:** "plotting" (tramar) y "my usual spot" (mi sitio habitual) apuntan a planificación y a un lugar recurrente. Es un hecho (el texto) con una hipótesis asociada (que el sitio sea la cafetería).
+- **Lección:** el enunciado da la fecha y la hora como **clave de búsqueda**; úsala para ir directo al post.
+
+---
+
+## 5. P8 y P9: Handle y bio del perfil de Instagram
+
+Misma captura 1.
+
+| Pregunta | Respuesta | Dónde se ve |
+|---|---|---|
+| P8: usuario de Instagram | `@justice_rises_2025` | Cabecera del perfil |
+| P9: bio sin emojis | `Student activist \| Truth seeker \| They can't silence us all` | Debajo de los contadores (47 posts, 234 followers, 189 following) |
+
+- **Detalle:** la bio acaba con un emoji de fuego, que hay que **quitar**. Las barras verticales `|` forman parte del texto.
+- **Qué aporta:** el perfil se presenta como "Student activist" (activista estudiantil): contexto de agravio o militancia, sin información de empleo ni de contacto.
+- **Lección:** el handle `justice_rises_2025` es el selector; el nombre real que acompaña (Jordan Davidson) es el primer pivote.
+
+---
+
+## 6. P3: La fecha del post "tick tock"
+
+![[04-instagram-tick-tock.png]]
+
+*Captura 4: el post del reloj. Se lee "justice_rises_2025 tick tock ⏰ October 5th approaches", con 15 likes y 7 comentarios.*
+
+- **Pregunta:** en el post cuyo caption es `tick tock ⏰`, ¿qué fecha menciona el usuario? (tal como la escribe)
+- **Respuesta:** `October 5th`
+- **Por qué se escribe así:** la plataforma pide el formato del usuario: mes en inglés con mayúscula inicial y "5th", sin año.
+- **Por qué importa:** coincide con la fecha del festival Unity Week y con el plazo del enunciado. Es lenguaje de **cuenta atrás**, no de queja genérica.
+- **Qué no se explotó:** el post tiene 7 comentarios; en un caso real se leerían para ver quién interactúa y qué se responde.
+
+---
+
+## 7. P2, P4, P5, P11: el portal de Recursos Humanos
+
+![[03-hr-portal.png]]
+
+*Captura 3: el HR Portal. La búsqueda `justice_rises_2025` con los filtros "Department: Food Services" y "Location: Student Union" devuelve un único empleado.*
+
+### Cómo se llega a esta pantalla
+
+1. Del Instagram sale el nombre real: **Jordan Davidson**.
+2. El enunciado dice que trabaja en la **cafetería del campus**.
+3. Se filtra en el portal por departamento (*Food Services*) y ubicación (*Student Union*).
+4. El portal devuelve **"1 employee found"**.
+
+Que salga **un solo resultado** es lo importante: no hay ambigüedad entre homónimos. La foto de la ficha también coincide con la del perfil de Instagram.
+
+### Las cuatro respuestas de la ficha
+
+| Pregunta | Respuesta | Campo de la ficha |
+|---|---|---|
+| P11: nombre completo | `Jordan Davidson` | Cabecera de la ficha |
+| P2: ID de empleado | `2024-0847` | "Employee ID" bajo el nombre |
+| P5: horario exacto | `Tue/Thu/Sat 14:00-22:00` | "Schedule" |
+| P4: identificador físico (nota "approved per dress code exception") | `Visible tattoo (star, left wrist)` | "Manager Notes" |
+
+### Otros datos de la ficha que sirven para el informe
+
+- **Puesto:** Barista (Part-time).
+- **Estado:** ACTIVE - Under Review (hay una revisión interna abierta).
+- **Quién consulta:** el portal indica `security.liaison@university.edu` con nivel de acceso "Security Clearance".
+
+### Los errores de esta fase
+
+- En **P4**, la nota completa es *Visible tattoo (star, left wrist), approved per dress code exception*. La pregunta pide **el identificador**, no la nota entera, y hay que escribir el texto **tal como está**, con los paréntesis y la coma. Probar variantes a ciegas gasta intentos; lo correcto es copiar.
+- En **P5**, el formato `Tue/Thu/Sat 14:00-22:00` lleva barras y un guion sin espacios.
+
+### Lo que aprendo
+
+- Un portal interno (aquí, simulado) puede dar de golpe cuatro respuestas: **cuando una fuente es rica, extrae todo antes de salir**.
+- El tatuaje es un **identificador físico**: serviría para casar al sujeto con fotos en redes.
+
+---
+
+## 8. P6: Usuario de Discord de "tue/thu/sat shifts... so boring"
+
+![[05-discord-turnos.png]]
+
+*Captura 5: el mensaje en el canal #general de Discord, de las 2:52 PM.*
+
+- **Pregunta:** ¿cuál es el nombre de usuario de quien escribió "especially tue/thu/sat shifts... so boring"?
+- **Respuesta:** `JusticeR`
+- **Detalle:** es distinto del handle de Instagram (`justice_rises_2025`) y del de Reddit (`Justice_Rises_2025`). El nombre se copia tal cual: J y R en mayúscula, sin espacios.
+- **El vínculo:** "tue/thu/sat shifts" **coincide exactamente** con el horario "Tue/Thu/Sat" del HR Portal. Esa coincidencia une la cuenta de Discord con Jordan Davidson.
+- **Matiz de tono:** "so boring" es una queja **suave**. Por sí sola apunta más a un empleado descontento que a un agente durmiente.
+
+---
+
+## 9. P7: Colores del uniforme
+
+![[06-discord-uniformes.png]]
+
+*Captura 6: segundo mensaje, de las 2:55 PM. El texto "brown and green uniforms" aparece resaltado.*
+
+- **Pregunta:** cuando JusticeR describe los uniformes de su trabajo, ¿qué colores menciona?
+- **Respuesta:** `brown and green`
+- **Vínculo con el HR Portal:** "the one in student union" coincide con el filtro **Location: Student Union** que dio una sola ficha.
+- **Vínculo con la terminal:** en la salida de la estación aparece una línea sobre colores de uniforme que coinciden con los del campus.
+- **Lección:** si la plataforma rechaza `brown and green`, la alternativa es `brown and green uniforms`; la forma más corta suele ser la que se espera cuando la pregunta pide "colores".
+
+---
+
+## 10. P10: Usuario de Reddit
+
+- **Pregunta:** nombre de usuario exacto que se ve en el perfil de Reddit.
+- **Respuesta:** `u/Justice_Rises_2025`
+- **Detalle clave:** lleva el prefijo `u/` y **mayúsculas** en cada palabra, a diferencia del handle de Instagram (todo en minúsculas). Es el tipo de diferencia que hace fallar una respuesta si se escribe "de memoria".
+- **Lección:** el **mismo alias** aparece en cuatro plataformas con variaciones de formato (`justice_rises_2025`, `JusticeR`, `Justice_Rises_2025`). Esa reutilización de alias es lo que hace posible el OSINT.
+
+---
+
+## 11. El metadato de la foto (ExifTool)
+
+En la misma captura 2, la terminal muestra la salida de ExifTool sobre `IMG_2847.jpg`:
+
+```
+ExifTool Version: 12.42
+File Name: IMG_2847.jpg
+Camera Model: iPhone 12 Pro
+GPS Latitude: 40.7128° N (STRIPPED)
+GPS Longitude: 74.0060° W (STRIPPED)
+Create Date: 2025:09:30 14:55:31
+Software: Instagram Filters
+```
+
+| Campo | Qué dice | Qué significa |
+|---|---|---|
+| `Create Date` | 2025:09:30 14:55:31 | La foto se creó el 30/09/2025 a las 14:55:31, **igual que la hora del post** (2:55 PM) |
+| `Camera Model` | iPhone 12 Pro | Dispositivo usado |
+| `Software` | Instagram Filters | La imagen pasó por filtros de Instagram |
+| `GPS ... (STRIPPED)` | Coordenadas borradas | El sujeto, o la plataforma, **eliminó la ubicación** |
+
+Cómo leerlo con rigor:
+
+- La coincidencia de fecha y hora corrobora que el post es del momento en que se hizo la foto.
+- Las coordenadas aparecen marcadas como `STRIPPED`: **no se pueden usar como dato de ubicación**. Aunque correspondan al centro de Nueva York, el propio dato las declara borradas.
+- Que el sujeto limpie la ubicación es un indicador de **higiene operativa** (aunque Instagram también borra el GPS al subir imágenes, así que no es prueba de intención).
+
+---
+
+## 12. Cruces entre fuentes: donde está la inteligencia
+
+| Vínculo | Fuente A | Fuente B | Qué demuestra |
+|---|---|---|---|
+| Misma persona | Instagram (`Jordan Davidson`, foto) | HR Portal (`Jordan Davidson`, misma foto) | El perfil de Instagram es de un empleado real de la cafetería |
+| Mismo horario | HR Portal (`Tue/Thu/Sat 14:00-22:00`) | Discord (`tue/thu/sat shifts`) | `JusticeR` es el mismo empleado |
+| Mismo lugar | HR Portal (`Location: Student Union`) | Discord ("the one in student union") | Habla de su propio lugar de trabajo |
+| Misma hora | Instagram (post 2:55 PM) y EXIF (14:55:31) | Discord (mensaje de uniformes, 2:55 PM) | Actividad simultánea en varias plataformas |
+| Misma fecha clave | Instagram ("October 5th") | Matriz de amenaza (evento 5 de octubre de 2025) | El post apunta al evento |
+
+---
+
+## 13. Línea de tiempo
+
+| Fecha / hora | Hecho | Fuente |
+|---|---|---|
+| 15 sept 2025 | Inicio del "periodo de escalada" (15 días activos) | Matriz de amenaza |
+| 30 sept 2025, 2:52 PM | Mensaje de Discord sobre turnos aburridos | Discord |
+| 30 sept 2025, 2:55 PM | Post "plotting at my usual spot"; la foto se creó a las 14:55:31 | Instagram y EXIF |
+| 30 sept 2025, 2:55 PM | Mensaje de Discord sobre uniformes marrones y verdes | Discord |
+| 30 sept (martes) | Día de turno según el horario (martes, 14:00-22:00) | HR Portal |
+| 5 oct 2025 | Fecha del festival Unity Week (Main Stage Area) | Instagram y matriz |
+
+**Hipótesis (a confirmar):** el 30 de septiembre de 2025 fue **martes**, día de turno del sujeto, y los tres mensajes ocurren dentro de su turno (14:00 a 22:00). Si el mensaje "Today at 2:52 PM" de Discord es de ese mismo día, escribió en dos plataformas desde el trabajo. La palabra "Today" de Discord es relativa, por lo que no se puede asegurar la fecha solo con la captura.
+
+---
+
+## 14. Valoración: ¿empleado descontento o agente durmiente?
+
+La plataforma **no da veredicto**: la pregunta del enunciado queda abierta. La valoración propia, con lo que se ha recogido:
+
+| Indicador | Evidencia | Lo que sugiere |
+|---|---|---|
+| Descontento laboral | "especially tue/thu/sat shifts... so boring" | Agravio laboral, de tono **suave** |
+| Identidad militante | Bio "Student activist / They can't silence us all" | Activismo; sensación de ser silenciado |
+| Planificación | "plotting at my usual spot", "tick tock ... October 5th approaches" | Lenguaje de planificación con fecha concreta |
+| Acceso | Barista en el Student Union, uniforme conocido | Acceso físico a la zona del evento |
+| Higiene operativa | GPS borrado de la foto | Cautela con la ubicación (ambigua, ver sección 11) |
+
+Y lo que **falta** para poder afirmar lo segundo:
+
+- **No hay evidencia de vínculo con la "Serpent Society"** en los datos recogidos: esa organización solo aparece en el enunciado.
+- No se ven detalles **operativos** (método, lugar exacto, medios), que son los que separan una amenaza real de la retórica.
+
+**Conclusión prudente:** hay indicadores de agravio y de planificación con una fecha concreta, pero sin pruebas de pertenencia a ninguna organización ni de capacidad o método. Es un caso que justificaría **seguimiento y escalado a seguridad**, no una afirmación de que sea un agente durmiente.
+
+El panel de la plataforma marca riesgo **HIGH (11/20)**, con "Grievance" (peso 3) e "Ideation" (peso 4) como PRESENT. Es coherente con el análisis, pero es una herramienta de resumen, no evidencia independiente.
+
+---
+
+## 15. Autoevaluación (responde sin mirar)
+
+> [!question]- 1. ¿Por qué se filtra el HR Portal por "Food Services" y "Student Union"?
+> Porque el enunciado dice que el sujeto trabaja en la cafetería del campus. Los filtros reducen la búsqueda a un único empleado, lo que evita confundirlo con un homónimo.
+
+> [!question]- 2. ¿Qué dos datos unen la cuenta de Discord `JusticeR` con Jordan Davidson?
+> El horario (`tue/thu/sat` en Discord y `Tue/Thu/Sat` en RRHH) y el lugar ("the one in student union" frente a `Location: Student Union`). La foto de perfil coincide además con la de Instagram y la de la ficha.
+
+> [!question]- 3. ¿Por qué `Create Date 2025:09:30 14:55:31` es útil?
+> Porque coincide con la hora del post (2:55 PM). Corrobora que el post es del momento en que se hizo la foto.
+
+> [!question]- 4. ¿Por qué no se puede usar el GPS del EXIF como ubicación?
+> Porque aparece marcado como `STRIPPED`: los datos de ubicación se han borrado.
+
+> [!question]- 5. ¿Por qué los tres alias (`justice_rises_2025`, `JusticeR`, `Justice_Rises_2025`) importan?
+> Porque la reutilización de un alias con pequeñas variaciones entre plataformas es lo que permite seguir a una persona de una a otra.
+
+> [!question]- 6. ¿Qué diferencia hay entre un hecho, una inferencia y una hipótesis en este caso?
+> Hecho: el post dice "October 5th approaches". Inferencia: el horario coincide, luego es la misma persona. Hipótesis: "my usual spot" es la cafetería.
+
+> [!question]- 7. ¿Por qué no se puede afirmar que sea un agente durmiente?
+> No hay evidencia de vínculo con la Serpent Society en los datos recogidos y faltan detalles operativos. Hay indicadores de agravio y planificación, pero eso no prueba pertenencia ni capacidad.
+
+---
+
+## 16. Playbook OSINT reutilizable
+
+1. **Lee las preguntas** y anota qué plataformas implican.
+2. **Parte del selector** y haz un barrido de plataformas donde exista.
+3. **Anota cada dato con su fuente** (plataforma, sección, captura, hora).
+4. **Extrae todo de una fuente rica** antes de pasar a la siguiente.
+5. **Cada dato nuevo es un selector nuevo**: nombre, empleador, horario, lugar.
+6. **Busca cruces** entre fuentes (nombre, foto, horario, lugar, hora).
+7. **Revisa metadatos** de imágenes (fecha, dispositivo, GPS).
+8. **Copia los textos exactos**; no los reescribas.
+9. **Separa hecho, inferencia e hipótesis** en el informe.
+10. **Anota lo que no encontraste** y lo que no exploraste (TikTok, comentarios, seguidores).
+
+---
+
+## 17. Lo que no se exploró
+
+- La pestaña de **TikTok** (`@justice_rises_2...`).
+- Los **7 comentarios** del post "tick tock" y los 15 "me gusta".
+- Los **seguidores y seguidos** (234 y 189) y las cuentas sugeridas (`campus_activist`, `student_truth`, `brad_miller_02`, `sarahhhh.xo`).
+- El **resto del canal #general** de Discord y el contenido del Reddit.
+- **Maltego**: no se usó para graficar las relaciones.
+
+---
+
+## 18. Glosario
+
+| Término | Significado |
+|---|---|
+| **OSINT** | Inteligencia de fuentes abiertas |
+| **SOCMINT** | OSINT aplicada a redes sociales |
+| **Selector** | Dato de partida (usuario, correo, teléfono) del que se tira |
+| **Pivote** | Pasar de un dato a una fuente nueva usando ese dato |
+| **Corroboración cruzada** | Confirmar un dato con una segunda fuente independiente |
+| **EXIF** | Metadatos incrustados en una foto (fecha, cámara, GPS) |
+| **Higiene operativa** | Prácticas para no dejar rastro (borrar metadatos, separar cuentas) |
